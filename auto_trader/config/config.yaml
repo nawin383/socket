@@ -1,0 +1,63 @@
+# Kite auto-trader configuration.
+# Secrets (API keys, passwords, TOTP secret) live in .env, not here.
+
+mode: paper   # "paper" (simulate fills, no real orders) or "live" (real money). Start in paper.
+
+underlying:
+  name: NIFTY
+  spot_symbol: "NSE:NIFTY 50"
+  spot_instrument_token: 256265
+  strike_step: 50
+
+pe_leg:
+  enabled: true
+  expiry_type: monthly
+  target_premium: 700       # entry: pick the ITM PE whose live premium is closest to this
+  premium_tolerance: 60
+  strike_search_range: 15   # how many strikes away from ATM to search
+  quantity_lots: 1
+  product: NRML
+  close_before_expiry:
+    enabled: true
+    time: "15:15"           # square off on expiry day at/after this time (IST)
+
+ce_leg:
+  enabled: true
+  expiry_type: weekly
+  target_premium: 120       # entry: pick the ATM CE whose live premium is closest to this
+  premium_tolerance: 15
+  strike_search_range: 10
+  quantity_lots: 1
+  product: NRML
+  exit_premium_threshold: 90   # exit + roll once premium drops below this
+  exit_requires_otm: true      # AND the strike must have drifted OTM vs spot
+  reentry_moneyness: ATM       # re-enter at the fresh ATM strike after a roll
+  min_seconds_between_rolls: 60
+  max_rolls_per_day: 15
+  close_before_expiry:
+    enabled: true
+    time: "15:15"
+
+orders:
+  entry_order_style: LIMIT
+  slippage_buffer_pct: 1.0        # marketable-limit price offset vs LTP
+  order_fill_timeout_sec: 20      # wait this long for the limit order, then...
+  fallback_to_market: true        # ...cancel and send a MARKET order instead
+
+risk:
+  max_daily_loss: 15000           # realized P&L floor (INR); breach -> square off + halt for the day
+  kill_switch_file: "STOP_TRADING"  # touch data/STOP_TRADING to pause new entries/rolls instantly
+  trading_start: "09:20"
+  trading_end: "15:20"
+  eod_square_off_time: "15:25"
+  holidays: []                    # add NSE holiday dates as "YYYY-MM-DD"
+
+notifications:
+  telegram_enabled: true
+
+health:
+  http_port: 8080
+
+polling:
+  reconcile_interval_sec: 15
+  token_refresh_check_hour: 8     # from this hour onward, re-login once per new day

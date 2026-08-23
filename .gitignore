@@ -137,3 +137,7 @@ Thumbs.db
 config.ini
 credentials.json
 *.log
+
+# auto_trader runtime state (secrets, token cache, positions DB, kill switch)
+auto_trader/data/
+auto_trader/**/.env

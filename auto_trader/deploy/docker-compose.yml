@@ -1,0 +1,18 @@
+services:
+  kite-trader:
+    build:
+      context: ../..
+      dockerfile: auto_trader/deploy/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      - ../data:/app/auto_trader/data
+      - ../config:/app/auto_trader/config
+    ports:
+      - "8080:8080"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
