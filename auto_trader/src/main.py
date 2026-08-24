@@ -66,7 +66,7 @@ def main():
     strategy.reconcile_from_broker()
 
     spot_token = config["underlying"]["spot_instrument_token"]
-    latest = {"spot": None, "ce_ltp": None, "pe_ltp": None}
+    latest = {"spot": None, "ce_ltp": None, "pe_ltp": None, "pe_pending_ltp": None}
 
     def on_ticks(ticks):
         for tick in ticks:
@@ -79,6 +79,9 @@ def main():
             pe_leg = state.get_leg("PE")
             if pe_leg and token == pe_leg["instrument_token"]:
                 latest["pe_ltp"] = tick["last_price"]
+            pe_pending = state.get_pending_order("PE")
+            if pe_pending and token == pe_pending["instrument_token"]:
+                latest["pe_pending_ltp"] = tick["last_price"]
 
     feed = TickerFeed(settings.api_key, kite.access_token, on_ticks)
     feed.start()
@@ -125,17 +128,22 @@ def main():
                 strategy.ensure_ce_leg()
                 ce_leg = state.get_leg("CE")
                 pe_leg = state.get_leg("PE")
+                pe_pending = state.get_pending_order("PE")
                 tokens = [spot_token]
                 if ce_leg:
                     tokens.append(ce_leg["instrument_token"])
                 if pe_leg:
                     tokens.append(pe_leg["instrument_token"])
+                if pe_pending:
+                    tokens.append(pe_pending["instrument_token"])
                 feed.set_tokens(tokens)
 
                 if ce_leg and latest["spot"] and latest["ce_ltp"]:
                     strategy.check_ce_roll(latest["ce_ltp"], latest["spot"])
                 if pe_leg and latest["pe_ltp"]:
                     strategy.check_pe_stop_loss(latest["pe_ltp"])
+                if pe_pending and latest["pe_pending_ltp"]:
+                    strategy.check_pending_pe_reentry(latest["pe_pending_ltp"], now)
 
             time.sleep(poll_cfg.get("reconcile_interval_sec", 15))
 

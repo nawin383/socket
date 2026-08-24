@@ -208,10 +208,10 @@
   <div class="masthead">
     <p class="eyebrow">auto_trader — system map</p>
     <h1>Roll Engine Blueprint</h1>
-    <p>How the Nifty PE/CE bot actually works end to end: where the daily login goes, how a tick becomes a roll decision, and what happens across a trading day — before any hosting choice gets bolted on.</p>
+    <p>How the Nifty PE/CE bot actually works end to end: where the daily login goes, how a roll or a stop-loss gets decided, and what happens across a trading day. Now running live on GitHub Actions.</p>
     <div class="status-row">
-      <span class="status-chip"><span class="swatch built"></span>solid = built &amp; tested (PR #2)</span>
-      <span class="status-chip"><span class="swatch pending"></span>dashed = hosting not yet decided</span>
+      <span class="status-chip"><span class="swatch built"></span>solid = built &amp; tested</span>
+      <span class="status-chip"><span class="swatch pending"></span>dashed = a loop back to an earlier step</span>
       <span class="status-chip"><span class="swatch action"></span>amber = the actual trade action</span>
     </div>
   </div>
@@ -253,8 +253,8 @@
           </g>
 
           <!-- Band B: host (pending) -->
-          <rect x="40" y="150" width="1120" height="410" rx="6" fill="none" class="pending-stroke" stroke-width="1.6"/>
-          <text x="60" y="140" class="band-label label-sans" font-size="12" letter-spacing="1">ALWAYS-ON HOST — hosting not yet decided</text>
+          <rect x="40" y="150" width="1120" height="410" rx="6" fill="none" stroke="var(--line)" stroke-width="1.6"/>
+          <text x="60" y="140" class="band-label label-sans" font-size="12" letter-spacing="1">GITHUB ACTIONS — ephemeral runner, scheduled every ~5 min</text>
 
           <!-- row 1 -->
           <g class="node-stroke" stroke-width="1.3">
@@ -476,6 +476,114 @@
     <div class="block-head">
       <span class="block-num">03</span>
       <div>
+        <h2>PE stop-loss, and one tighter re-entry</h2>
+        <p>A stop-loss caps the loss on a move, but if that move turns out to be a whipsaw, exiting also gives up the recovery. This structures exactly one retry, at a discount, with its own hard cap — not a repeat of the original percentage stop.</p>
+      </div>
+    </div>
+    <figure>
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1500 595" role="img" aria-label="Flowchart: the PE leg is held and checked against its stop-loss trigger — the original leg's trigger is entry price times 1 plus 40 percent, a re-entered leg's trigger is instead a flat price equal to the original trigger. If the trigger is hit, buy to close, locking in the loss. Then check whether this was already a re-entry leg. If yes, the day is done for the PE side. If no, rest a sell limit order at the trigger price minus a configured discount of 20 points, on the same strike. Each cycle, check whether that resting order has filled. If filled, a new PE leg opens at the discounted price with a flat stop set at the original trigger price, capping this second attempt's maximum loss at exactly the discount, and that new leg goes back into the same stop-loss check at the top. If not filled and past the 15:20 cutoff, cancel the order and stay flat for the rest of the day. If not filled and still before the cutoff, keep resting and check again next cycle.">
+          <defs>
+            <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+            </marker>
+            <marker id="arrow3-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" class="accent-text" />
+            </marker>
+          </defs>
+
+          <text x="20" y="20" class="band-label label-sans" font-size="12" letter-spacing="1">ORIGINAL LEG — % STOP, OR A RE-ENTERED LEG — FLAT STOP AT THE SAME PRICE</text>
+
+          <!-- Row A -->
+          <rect x="20" y="65" width="210" height="70" rx="4" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="125" y="97" text-anchor="middle" font-size="12.5" font-weight="500">PE leg holding</text>
+          <text x="125" y="114" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">watching its own trigger</text>
+
+          <polygon points="410,25 530,100 410,175 290,100" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="410" y="92" text-anchor="middle" font-size="11.5" font-weight="500">premium ≥ SL</text>
+          <text x="410" y="108" text-anchor="middle" font-size="11.5" font-weight="500">trigger price?</text>
+
+          <rect x="640" y="65" width="210" height="70" rx="4" class="accent-node" stroke-width="1.6"/>
+          <text x="745" y="97" text-anchor="middle" font-size="12.5" font-weight="600">BUY to close</text>
+          <text x="745" y="114" text-anchor="middle" font-size="11">locks in the loss</text>
+
+          <polygon points="1030,25 1150,100 1030,175 910,100" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="1030" y="92" text-anchor="middle" font-size="11" font-weight="500">already a</text>
+          <text x="1030" y="108" text-anchor="middle" font-size="11" font-weight="500">re-entry leg?</text>
+
+          <!-- Row B -->
+          <rect x="640" y="300" width="250" height="80" rx="4" class="accent-node" stroke-width="1.6"/>
+          <text x="765" y="330" text-anchor="middle" font-size="12.5" font-weight="600">Rest SELL LIMIT</text>
+          <text x="765" y="348" text-anchor="middle" font-size="11">same strike, at trigger − discount</text>
+          <text x="765" y="364" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">e.g. 980 − 20 = 960</text>
+
+          <polygon points="1090,270 1185,340 1090,410 995,340" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="1090" y="345" text-anchor="middle" font-size="12" font-weight="500">filled?</text>
+
+          <rect x="1240" y="290" width="240" height="90" rx="4" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="1360" y="318" text-anchor="middle" font-size="12" font-weight="500">New PE leg opens</text>
+          <text x="1360" y="335" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">entry = discounted fill</text>
+          <text x="1360" y="350" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">flat stop = original trigger</text>
+          <text x="1360" y="366" text-anchor="middle" font-size="10.5" class="accent-text" font-weight="600">max loss capped at discount</text>
+
+          <polygon points="1090,425 1185,480 1090,535 995,480" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="1090" y="475" text-anchor="middle" font-size="10.5" font-weight="500">past 15:20</text>
+          <text x="1090" y="490" text-anchor="middle" font-size="10.5" font-weight="500">cutoff?</text>
+
+          <rect x="1240" y="445" width="240" height="70" rx="4" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="1360" y="475" text-anchor="middle" font-size="12" font-weight="500">Flat for the rest of today</text>
+          <text x="1360" y="492" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">no third attempt either way</text>
+
+          <!-- Row A flow -->
+          <line x1="230" y1="100" x2="288" y2="100" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow3)"/>
+          <path d="M410,175 V220 H125 V135" class="arrow-line" stroke-width="1.3" fill="none" stroke-dasharray="4 4" marker-end="url(#arrow3)"/>
+          <text x="240" y="215" font-size="10.5" class="arrow-label">no — keep holding</text>
+
+          <line x1="530" y1="100" x2="638" y2="100" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow3)"/>
+          <text x="584" y="92" text-anchor="middle" font-size="10.5" class="arrow-label">yes</text>
+
+          <line x1="850" y1="100" x2="908" y2="100" class="arrow-accent" stroke-width="1.8" marker-end="url(#arrow3-accent)"/>
+
+          <!-- diamond2 -> terminal (yes, already a re-entry); routed right of both
+               stacked row-B boxes so it doesn't cut through "New PE leg opens" -->
+          <path d="M1030,175 V230 H1490 V475 H1482" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow3)"/>
+          <text x="1045" y="223" font-size="10.5" class="arrow-label">yes</text>
+
+          <!-- diamond2 -> rest limit (no, first time); routed down through the
+               gap band first so it doesn't cut through "BUY to close" -->
+          <path d="M910,100 V210 H765 V300" class="arrow-accent" stroke-width="1.8" fill="none" marker-end="url(#arrow3-accent)"/>
+          <text x="820" y="203" text-anchor="middle" font-size="10.5" class="accent-text">no — place tighter re-entry</text>
+
+          <!-- Row B flow -->
+          <line x1="890" y1="340" x2="993" y2="340" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow3)"/>
+
+          <path d="M1185,340 H1210 V335 H1240" class="arrow-accent" stroke-width="1.8" fill="none" marker-end="url(#arrow3-accent)"/>
+          <text x="1197" y="325" text-anchor="middle" font-size="10.5" class="accent-text">yes</text>
+
+          <path d="M1090,410 V480 H993" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow3)"/>
+          <text x="1100" y="430" font-size="10.5" class="arrow-label">no</text>
+
+          <path d="M1185,480 H1240" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow3)"/>
+          <text x="1212" y="470" text-anchor="middle" font-size="10.5" class="arrow-label">yes</text>
+
+          <path d="M1090,535 Q1090,565 890,565 Q765,565 765,382" class="arrow-line" stroke-width="1.3" fill="none" stroke-dasharray="4 4" marker-end="url(#arrow3)"/>
+          <text x="930" y="578" text-anchor="middle" font-size="10.5" class="arrow-label">no — still resting, recheck next cycle</text>
+
+          <!-- new leg loops back into the same stop-loss check -->
+          <path d="M1360,290 V8 H125 V63" class="arrow-line" stroke-width="1.3" fill="none" stroke-dasharray="4 4" marker-end="url(#arrow3)"/>
+          <text x="1375" y="180" font-size="10.5" class="arrow-label">now monitored</text>
+          <text x="1375" y="193" font-size="10.5" class="arrow-label">the same way —</text>
+          <text x="1375" y="206" font-size="10.5" class="arrow-label">flat stop this time</text>
+        </svg>
+      </div>
+      <figcaption>The discount and the 15:20 cutoff are both configurable (pe_leg.reentry_after_stop_loss). A whipsaw gets a cheaper second entry; a real trend costs the original stop plus at most the discount — never a third attempt.</figcaption>
+    </figure>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">04</span>
+      <div>
         <h2>A trading day, start to finish</h2>
         <p>What happens automatically, in order, with no one watching. Spacing here is sequential, not to scale — the gap between 15:15 and 15:30 is drawn the same width as the whole trading session.</p>
       </div>
@@ -546,7 +654,7 @@
   </section>
 
   <div class="takeaway">
-    <p><strong>Why this matters before picking infra:</strong> the amber path in diagram 1 and the continuous monitoring band in diagram 3 are exactly what changes shape depending on hosting.</p>
-    <p>On a home device or a VPS, <code>kite_websocket</code> holds a live connection and <code>check_ce_roll()</code> fires the instant a tick crosses the threshold. On GitHub Actions, there's no persistent connection to hold — that box gets replaced by a scheduled poll of <code>kite.quote()</code> every ~5 minutes, and the accent band in diagram 3 becomes a series of dots instead of a continuous line.</p>
+    <p><strong>Why this matters before picking infra:</strong> the amber path in diagram 01 and the continuous monitoring band in diagram 04 are exactly what changes shape depending on hosting.</p>
+    <p>On a home device or a VPS, <code>kite_websocket</code> holds a live connection and <code>check_ce_roll()</code>/<code>check_pe_stop_loss()</code> fire the instant a tick crosses a threshold. On GitHub Actions, there's no persistent connection to hold — that box gets replaced by a scheduled poll of <code>kite.quote()</code>/<code>kite.ltp()</code> every ~5 minutes, and the accent band in diagram 04 becomes a series of dots instead of a continuous line. The PE re-entry order in diagram 03 rests on the exchange either way — it's only the roll/stop-loss <em>checks</em> that go from instant to polled.</p>
   </div>
 </main>

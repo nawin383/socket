@@ -102,13 +102,17 @@ def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
 
     ce_leg = state.get_leg("CE")
     pe_leg = state.get_leg("PE")
-    if ce_leg or pe_leg:
+    pe_pending = state.get_pending_order("PE")
+
+    if ce_leg or pe_leg or pe_pending:
         spot_symbol = config["underlying"]["spot_symbol"]
         keys = [spot_symbol]
         if ce_leg:
             keys.append(f"{ce_leg['exchange']}:{ce_leg['tradingsymbol']}")
         if pe_leg:
             keys.append(f"{pe_leg['exchange']}:{pe_leg['tradingsymbol']}")
+        if pe_pending:
+            keys.append(f"{pe_pending['exchange']}:{pe_pending['tradingsymbol']}")
         quotes = kite.ltp(keys)
 
         if ce_leg:
@@ -118,6 +122,9 @@ def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
         if pe_leg:
             pe_ltp = quotes[f"{pe_leg['exchange']}:{pe_leg['tradingsymbol']}"]["last_price"]
             strategy.check_pe_stop_loss(pe_ltp)
+        if pe_pending:
+            pe_pending_ltp = quotes[f"{pe_pending['exchange']}:{pe_pending['tradingsymbol']}"]["last_price"]
+            strategy.check_pending_pe_reentry(pe_pending_ltp, now)
 
 
 if __name__ == "__main__":

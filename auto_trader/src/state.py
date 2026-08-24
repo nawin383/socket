@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS legs (
     option_type TEXT NOT NULL,
     quantity INTEGER NOT NULL,
     entry_price REAL NOT NULL,
-    entry_time TEXT NOT NULL
+    entry_time TEXT NOT NULL,
+    sl_reference_price REAL
 );
 
 CREATE TABLE IF NOT EXISTS roll_history (
@@ -51,6 +52,20 @@ CREATE TABLE IF NOT EXISTS sl_events (
     time TEXT NOT NULL,
     PRIMARY KEY (leg, trading_day)
 );
+
+CREATE TABLE IF NOT EXISTS pending_orders (
+    leg TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    tradingsymbol TEXT NOT NULL,
+    instrument_token INTEGER NOT NULL,
+    exchange TEXT NOT NULL,
+    strike REAL NOT NULL,
+    quantity INTEGER NOT NULL,
+    limit_price REAL NOT NULL,
+    sl_reference_price REAL NOT NULL,
+    valid_until TEXT NOT NULL,
+    placed_time TEXT NOT NULL
+);
 """
 
 
@@ -60,7 +75,16 @@ class StateStore:
         self.db_path = db_path
         with closing(self._connect()) as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
             conn.commit()
+
+    def _migrate(self, conn: sqlite3.Connection):
+        """CREATE TABLE IF NOT EXISTS only helps brand-new databases — this repo's
+        committed state.db already had a `legs` table before sl_reference_price
+        existed, so that column needs an explicit ALTER on existing databases."""
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(legs)")}
+        if "sl_reference_price" not in cols:
+            conn.execute("ALTER TABLE legs ADD COLUMN sl_reference_price REAL")
 
     def _connect(self):
         conn = sqlite3.connect(self.db_path)
@@ -72,14 +96,15 @@ class StateStore:
             return conn.execute("SELECT * FROM legs WHERE leg = ?", (leg,)).fetchone()
 
     def set_leg(self, leg: str, tradingsymbol: str, instrument_token: int, exchange: str,
-                strike: float, option_type: str, quantity: int, entry_price: float):
+                strike: float, option_type: str, quantity: int, entry_price: float,
+                sl_reference_price: Optional[float] = None):
         with closing(self._connect()) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO legs "
                 "(leg, tradingsymbol, instrument_token, exchange, strike, option_type, "
-                " quantity, entry_price, entry_time) VALUES (?,?,?,?,?,?,?,?,?)",
+                " quantity, entry_price, entry_time, sl_reference_price) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (leg, tradingsymbol, instrument_token, exchange, strike, option_type,
-                 quantity, entry_price, datetime.now().isoformat()),
+                 quantity, entry_price, datetime.now().isoformat(), sl_reference_price),
             )
             conn.commit()
 
@@ -145,3 +170,25 @@ class StateStore:
                 "SELECT 1 FROM sl_events WHERE leg = ? AND trading_day = ?", (leg, today)
             ).fetchone()
             return row is not None
+
+    def set_pending_order(self, leg: str, order_id: str, tradingsymbol: str, instrument_token: int,
+                           exchange: str, strike: float, quantity: int, limit_price: float,
+                           sl_reference_price: float, valid_until: str):
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO pending_orders "
+                "(leg, order_id, tradingsymbol, instrument_token, exchange, strike, quantity, "
+                " limit_price, sl_reference_price, valid_until, placed_time) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (leg, order_id, tradingsymbol, instrument_token, exchange, strike, quantity,
+                 limit_price, sl_reference_price, valid_until, datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def get_pending_order(self, leg: str) -> Optional[sqlite3.Row]:
+        with closing(self._connect()) as conn:
+            return conn.execute("SELECT * FROM pending_orders WHERE leg = ?", (leg,)).fetchone()
+
+    def clear_pending_order(self, leg: str):
+        with closing(self._connect()) as conn:
+            conn.execute("DELETE FROM pending_orders WHERE leg = ?", (leg,))
+            conn.commit()
