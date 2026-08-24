@@ -65,12 +65,36 @@ class TokenCache:
         }))
 
 
+def _json_or_raise(response: requests.Response, step: str) -> dict:
+    """Parse a Kite login-flow response as JSON, raising LoginError with
+    Zerodha's own error message (not just the bare HTTP status) if the call
+    failed — the response body says WHY (invalid TOTP, invalid session,
+    rate-limited, etc.), which a plain raise_for_status() would swallow."""
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if not response.ok:
+        detail = payload.get("message") if isinstance(payload, dict) else response.text[:300]
+        raise LoginError(f"{step} failed ({response.status_code}): {detail}")
+
+    if payload is None:
+        raise LoginError(f"{step} returned a non-JSON response: {response.text[:300]}")
+
+    return payload
+
+
 def _fetch_request_token(api_key: str, user_id: str, password: str, totp_secret: str) -> str:
     session = requests.Session()
 
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    })
+
     r = session.post(LOGIN_URL, data={"user_id": user_id, "password": password}, timeout=15)
-    r.raise_for_status()
-    payload = r.json()
+    payload = _json_or_raise(r, "Login step")
     if payload.get("status") != "success":
         raise LoginError(f"Login step failed: {payload}")
     request_id = payload["data"]["request_id"]
@@ -81,9 +105,9 @@ def _fetch_request_token(api_key: str, user_id: str, password: str, totp_secret:
         data={"user_id": user_id, "request_id": request_id, "twofa_value": totp_code, "twofa_type": "totp"},
         timeout=15,
     )
-    r.raise_for_status()
-    if r.json().get("status") != "success":
-        raise LoginError(f"TOTP step failed: {r.json()}")
+    payload = _json_or_raise(r, "TOTP step")
+    if payload.get("status") != "success":
+        raise LoginError(f"TOTP step failed: {payload}")
 
     # Manually follow the Connect authorize redirect chain (never actually
     # requesting the final redirect_url, since it doesn't need to be a real
