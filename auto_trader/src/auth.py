@@ -118,16 +118,28 @@ def _fetch_request_token(api_key: str, user_id: str, password: str, totp_secret:
         params = None
         location = r.headers.get("Location")
         if not location:
-            break
+            # No redirect at all usually means Zerodha served an HTML page
+            # instead — most commonly the one-time "Authorise this app?"
+            # consent screen a brand-new Kite Connect app shows before its
+            # first-ever login. That needs one manual browser login+consent
+            # (visit the connect/login URL yourself and click Authorise);
+            # after that Zerodha remembers the app is authorized and this
+            # redirect chain goes straight through on every later run.
+            snippet = r.text[:200].replace("\n", " ")
+            raise LoginError(
+                f"No redirect from {r.url} (status {r.status_code}). This usually means a "
+                f"one-time manual authorization is needed for a new Kite Connect app — log in "
+                f"once yourself at https://kite.zerodha.com/connect/login?api_key={api_key}&v=3 "
+                f"and click Authorise, then retry. Response started with: {snippet!r}"
+            )
         query = parse_qs(urlparse(location).query)
         if "request_token" in query:
             return query["request_token"][0]
         url = location
 
     raise LoginError(
-        "Could not obtain a request_token from Zerodha's login redirect. "
-        "The login flow may have changed — try a manual login to confirm your "
-        "credentials/TOTP secret are correct."
+        "Followed 10 redirects without finding a request_token — the login flow may "
+        "have changed. Try a manual login to confirm your credentials/TOTP secret are correct."
     )
 
 
