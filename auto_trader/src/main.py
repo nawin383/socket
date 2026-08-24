@@ -20,6 +20,7 @@ from .risk import RiskGuard
 from .settings import BASE_DIR, load_settings
 from .state import StateStore
 from .strategy import NiftyOptionSellerStrategy
+from .telegram_bot import TelegramBot
 from .ticker_feed import TickerFeed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -65,6 +66,25 @@ def main():
 
     strategy.reconcile_from_broker()
 
+    # --- Telegram command bot (VPS only) — remote control when away from laptop ---
+    config_path = BASE_DIR / "config" / "config.yaml"
+    tg_bot = TelegramBot(
+        bot_token=settings.telegram_bot_token,
+        allowed_chat_id=settings.telegram_chat_id,
+        state=state,
+        risk=risk,
+        strategy=strategy,
+        orders=orders,
+        kite=kite,
+        store=store,
+        config=config,
+        config_path=config_path,
+        kill_switch_path=kill_switch_path,
+        notifier=notifier,
+        status_ref=status,
+    )
+    tg_bot.start()
+
     spot_token = config["underlying"]["spot_instrument_token"]
     latest = {"spot": None, "ce_ltp": None, "pe_ltp": None, "pe_pending_ltp": None}
 
@@ -104,6 +124,14 @@ def main():
                     store.kite = kite
                     store.load()
                     feed.kws.access_token = kite.access_token
+                    # Keep Telegram commands on fresh kite/connect
+                    try:
+                        tg_bot.kite = kite
+                        tg_bot.orders = orders
+                        tg_bot.strategy = strategy
+                        tg_bot.store = store
+                    except Exception:
+                        pass
                     last_token_refresh_day = now.date()
                     notifier.send("Daily re-login successful")
                 except Exception as e:
@@ -154,6 +182,10 @@ def main():
         notifier.send(f"Bot crashed: {e}")
         raise
     finally:
+        try:
+            tg_bot.stop()
+        except Exception:
+            pass
         feed.stop()
 
 
