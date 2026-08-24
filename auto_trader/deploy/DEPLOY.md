@@ -5,18 +5,41 @@ doesn't stop when your machine goes offline. Two options are covered:
 Docker (recommended — easiest to keep updated/restarted) and bare-metal
 systemd (if you'd rather not use Docker).
 
-A free-tier VM (e.g. Oracle Cloud "Always Free" Ampere A1) or a ~$4-6/mo box
-(DigitalOcean, Linode, AWS Lightsail) both work fine — this bot is very
-light on CPU/RAM.
+**Not using Oracle Cloud** — its Always Free tier's signup/fraud checks
+are well known to reject valid accounts for no clear reason, which isn't
+worth fighting. Instead, use a small paid VPS from a provider with an
+India data center — that also happens to put the bot physically close to
+Zerodha's own infrastructure (Mumbai), which is the thing that actually
+affects order-placement latency, more than which cloud brand you pick.
+
+**Recommended: DigitalOcean, Bangalore region (BLR1)** — smoothest signup
+of the mature providers, simple billing, ~$6/mo for a 1 GB droplet (this
+bot barely uses any CPU/RAM, so the smallest size is plenty). Equally good
+drop-in alternatives if DigitalOcean's signup gives you any trouble:
+**Vultr** (Mumbai region) or **Linode/Akamai** (Mumbai region) — same
+price range, same setup steps below, just pick their India region at
+creation time. All three take a card or PayPal, none of them run the kind
+of aggressive identity-verification gauntlet Oracle's free tier does.
+
+Realistically, at the polling/roll cadence this bot runs at (seconds, not
+milliseconds), the India-region latency advantage over a US/EU box is a
+few tens of milliseconds — it won't make or break the strategy's P&L. It's
+worth having anyway since it costs nothing extra, but don't mistake it for
+the difference between a fast and slow fill.
 
 ## 1. Provision the server
 
-- Ubuntu 22.04 LTS (or similar), smallest size available is enough.
-- Create it with SSH key auth only (no password auth).
-- `ufw allow OpenSSH && ufw allow 8080/tcp && ufw enable` (8080 is the
-  healthcheck endpoint — only open it if you want external uptime
-  monitoring to hit it directly; otherwise leave it closed and check
-  health via `curl localhost:8080` over SSH instead).
+1. Sign up at digitalocean.com (or vultr.com / linode.com as a backup).
+2. Create a Droplet (DO) / Instance (Vultr) / Linode:
+   - **Region**: Bangalore (DO) or Mumbai (Vultr/Linode).
+   - **Image**: Ubuntu 22.04 LTS.
+   - **Size**: the smallest/cheapest tier (1 vCPU, 1 GB RAM is comfortable).
+   - **Auth**: add your SSH public key; skip password auth.
+3. Once it boots, SSH in and lock down the firewall:
+   `ufw allow OpenSSH && ufw allow 8080/tcp && ufw enable` (8080 is the
+   healthcheck endpoint — only open it if you want external uptime
+   monitoring to hit it directly; otherwise leave it closed and check
+   health via `curl localhost:8080` over SSH instead).
 
 ## 2. Option A — Docker (recommended)
 
