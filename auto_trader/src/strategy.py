@@ -78,12 +78,43 @@ class NiftyOptionSellerStrategy:
             logger.info("Reconciled existing broker position into state: %s", tradingsymbol)
             self.notifier.send(f"Adopted existing broker position on startup: {tradingsymbol} x{quantity}")
 
+    def _get_overall_pnl_today(self, pe_ltp=None, ce_ltp=None):
+        """Realized today + unrealized of open legs (PE+CE). Used for smart PE profit & total MAXLOSS."""
+        row = self.state.today_state()
+        realized = row["realized_pnl"] or 0.0
+        unreal = 0.0
+        pe_leg = self.state.get_leg("PE")
+        if pe_leg:
+            if pe_ltp is None:
+                try:
+                    pe_ltp = self._quote_ltp(pe_leg["exchange"], pe_leg["tradingsymbol"])
+                except Exception:
+                    pe_ltp = None
+            if pe_ltp is not None:
+                unreal += (pe_leg["entry_price"] - pe_ltp) * pe_leg["quantity"]
+        ce_leg = self.state.get_leg("CE")
+        if ce_leg:
+            if ce_ltp is None:
+                try:
+                    ce_ltp = self._quote_ltp(ce_leg["exchange"], ce_leg["tradingsymbol"])
+                except Exception:
+                    ce_ltp = None
+            if ce_ltp is not None:
+                unreal += (ce_leg["entry_price"] - ce_ltp) * ce_leg["quantity"]
+        return realized + unreal, realized, unreal
+
     def ensure_pe_leg(self):
         if not self.pe_cfg.get("enabled", True) or self.state.get_leg("PE"):
             return
         if self.state.stop_loss_fired_today("PE"):
             logger.info("PE stop-loss already fired today — not re-entering")
             return
+        # Block same-day re-entry after a take-profit booking if configured to allow next day only
+        if self.state.take_profit_fired_today("PE"):
+            tp_cfg = self.pe_cfg.get("take_profit", {})
+            if tp_cfg.get("allow_reentry_next_day", True):
+                logger.info("PE take-profit already booked today — not re-entering")
+                return
 
         spot = self.get_spot()
         expiry = self.store.monthly_expiry(self.underlying_cfg["name"], date.today())
@@ -105,7 +136,16 @@ class NiftyOptionSellerStrategy:
             return
         self._open_ce_leg()
 
-    def _open_ce_leg(self):
+    def _open_ce_leg(self, quantity: int = None):
+        """
+        Open a fresh CE leg. If `quantity` is provided (e.g. from a roll — same qty
+        as the leg just closed), it is reused verbatim so the bot honours the
+        actual position size rather than recomputing lots × lot_size. Otherwise
+        qty = quantity_lots × real lot_size from Zerodha (info['lot_size'], not 75).
+        Near-weekly expiry the ATM ±2 window may not have a ₹120 premium — we
+        still pick the closest of those 5 strikes (ATM ±100) whichever is feasible,
+        warning if diff > tolerance but trading it anyway.
+        """
         spot = self.get_spot()
         min_days_out = 1 if self.ce_cfg.get("avoid_zero_dte_entry", True) else 0
         expiry = self.store.weekly_expiry(self.underlying_cfg["name"], date.today(), min_days_out=min_days_out)
@@ -115,13 +155,19 @@ class NiftyOptionSellerStrategy:
             self.ce_cfg["premium_tolerance"], self.ce_cfg["strike_search_range"],
             self.ce_cfg["reentry_moneyness"],
         )
-        quantity = self.ce_cfg["quantity_lots"] * info["lot_size"]
+        # Real lot size from Zerodha instrument dump (info['lot_size']), not a hardcoded 75
+        lot_size = info["lot_size"]
+        if quantity is None:
+            quantity = self.ce_cfg["quantity_lots"] * lot_size
+        # If quantity was passed from a roll, it already equals old leg's qty (e.g. 150 for 2 lots)
+        # — honour it directly so we exit all and re-enter at same qty.
         fill = self.orders.sell_to_open(info["tradingsymbol"], info["exchange"], quantity,
                                          info["premium"], self.ce_cfg["product"])
         self.state.set_leg("CE", info["tradingsymbol"], info["instrument_token"], info["exchange"],
                             info["strike"], "CE", quantity, fill)
         self.state.log_roll("CE", "ENTER", info["tradingsymbol"], fill, quantity)
-        self.notifier.send(f"CE leg opened: SELL {info['tradingsymbol']} x{quantity} @ {fill:.2f}")
+        lots = quantity // lot_size if lot_size else quantity
+        self.notifier.send(f"CE leg opened: SELL {info['tradingsymbol']} x{quantity} ({lots} lots, lot {lot_size}) @ {fill:.2f}")
         return info
 
     def _can_roll_now(self) -> bool:
@@ -149,19 +195,21 @@ class NiftyOptionSellerStrategy:
         if not should_exit or not self._can_roll_now():
             return
 
-        pnl = (leg["entry_price"] - ce_ltp) * leg["quantity"]
-        fill = self.orders.buy_to_close(leg["tradingsymbol"], leg["exchange"], leg["quantity"],
+        # Preserve actual qty: exit all and re-enter at same qty (not fixed 1 lot)
+        exit_qty = leg["quantity"]
+        pnl = (leg["entry_price"] - ce_ltp) * exit_qty
+        fill = self.orders.buy_to_close(leg["tradingsymbol"], leg["exchange"], exit_qty,
                                          ce_ltp, self.ce_cfg["product"])
-        realized = (leg["entry_price"] - fill) * leg["quantity"]
-        self.state.log_roll("CE", "EXIT", leg["tradingsymbol"], fill, leg["quantity"], note=f"pnl={realized:.2f}")
+        realized = (leg["entry_price"] - fill) * exit_qty
+        self.state.log_roll("CE", "EXIT", leg["tradingsymbol"], fill, exit_qty, note=f"pnl={realized:.2f}")
         self.state.add_realized_pnl(realized)
         self.state.clear_leg("CE")
         self.notifier.send(
-            f"CE leg rolled: BUY {leg['tradingsymbol']} x{leg['quantity']} @ {fill:.2f} "
-            f"(pnl {realized:.2f}) — opening fresh ATM CE"
+            f"CE leg rolled: BUY {leg['tradingsymbol']} x{exit_qty} @ {fill:.2f} "
+            f"(pnl {realized:.2f}) — opening fresh ATM CE at same qty"
         )
 
-        self._open_ce_leg()
+        self._open_ce_leg(quantity=exit_qty)
 
     def check_pe_stop_loss(self, pe_ltp: float):
         """
@@ -265,6 +313,74 @@ class NiftyOptionSellerStrategy:
             self.notifier.send(
                 f"PE re-entry order expired unfilled at {pending['limit_price']:.2f} — staying flat today."
             )
+
+    def check_pe_take_profit(self, pe_ltp: float, ce_ltp: float = None):
+        """
+        Smart PE profit booking — gives you profit control (you said CE you control, PE only SL).
+
+        Triggers when BOTH:
+          1) Premium is sufficiently *below* entry (profit). Uses take_profit.trigger_pct
+             e.g. entry 700, trigger 15% → book at 595 (700×0.85). Also requires
+             (entry - pe_ltp) ≥ min_profit_points (e.g., 20) to avoid tiny scalps near expiry.
+          2) If require_overall_profit, overall day PnL (realized + unrealized of BOTH legs)
+             must be > 0 — implements "based on overall position including closed profits,
+             once PE recovers from loss". If the PE is profitable but the day is still
+             deeply red due to earlier CE rolls, we don't book the PE early; we wait until
+             the whole portfolio has recovered.
+
+        On trigger: exit all PE qty at market (same qty logic as CE rolls — exit all),
+        log TAKE_PROFIT, add realized, record tp_events to block same-day re-entry if
+        allow_reentry_next_day, and stay flat until next trading day.
+        """
+        leg = self.state.get_leg("PE")
+        tp_cfg = self.pe_cfg.get("take_profit", {})
+        if not leg or not tp_cfg.get("enabled", False):
+            return
+
+        # Don't re-trigger same day if already booked (when allow_reentry_next_day)
+        if self.state.take_profit_fired_today("PE") and tp_cfg.get("allow_reentry_next_day", True):
+            return
+
+        entry = leg["entry_price"]
+        trigger_pct = tp_cfg.get("trigger_pct", 15)
+        min_pts = tp_cfg.get("min_profit_points", 20)
+        require_overall = tp_cfg.get("require_overall_profit", True)
+
+        # Premium must be below entry by trigger_pct and at least min_pts
+        trigger_price = round(entry * (1 - trigger_pct / 100.0), 2) if trigger_pct else entry
+        profit_points = entry - pe_ltp
+        if pe_ltp > trigger_price:
+            return
+        if profit_points < min_pts:
+            return
+
+        # Overall portfolio check — "once pe recovers from loss"
+        if require_overall:
+            total, realized, unreal = self._get_overall_pnl_today(pe_ltp=pe_ltp, ce_ltp=ce_ltp)
+            if total <= 0:
+                logger.info("PE take-profit ready (pe %.2f < trigger %.2f) but overall PnL %.2f not >0 — waiting for recovery", pe_ltp, trigger_price, total)
+                return
+
+        # Book profit — exit all qty at pe_ltp, same qty logic as CE roll
+        qty = leg["quantity"]
+        fill = self.orders.buy_to_close(leg["tradingsymbol"], leg["exchange"], qty, pe_ltp, self.pe_cfg["product"])
+        pnl = (entry - fill) * qty
+        today = datetime.now().date().isoformat()
+        self.state.log_roll("PE", "TAKE_PROFIT", leg["tradingsymbol"], fill, qty, note=f"pnl={pnl:.2f} trigger={trigger_price:.2f}")
+        self.state.add_realized_pnl(pnl)
+        self.state.record_take_profit("PE", today, entry, fill)
+        self.state.clear_leg("PE")
+        # Overall after booking for message
+        try:
+            total_after, _, _ = self._get_overall_pnl_today(pe_ltp=None, ce_ltp=ce_ltp)
+        except Exception:
+            total_after = pnl
+        self.notifier.send(
+            f"PE take-profit booked: BUY {leg['tradingsymbol']} x{qty} @ {fill:.2f} "
+            f"(entry {entry:.2f} → {fill:.2f}, pnl {pnl:.2f}). Overall day {total_after:.2f}. "
+            f"Next PE entry allowed next trading day."
+        )
+        logger.info("PE take-profit booked: %s @ %.2f pnl %.2f", leg["tradingsymbol"], fill, pnl)
 
     def square_off_leg_if_near_expiry(self, leg_name: str, cfg: dict, now: datetime):
         leg = self.state.get_leg(leg_name)

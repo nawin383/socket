@@ -145,9 +145,27 @@ def main():
                 strategy.square_off_leg_if_near_expiry("PE", strategy.pe_cfg, now)
                 strategy.square_off_leg_if_near_expiry("CE", strategy.ce_cfg, now)
 
-            if risk.daily_loss_breached():
+            # MAXLOSS now on total (realized + unrealized) — answers your question:
+            # "how will you determine based on todays loss or entire loss" — we now use entire.
+            # Compute overall via strategy helper (needs latest ltps if available)
+            try:
+                overall_pnl, _, _ = strategy._get_overall_pnl_today(
+                    pe_ltp=latest.get("pe_ltp"), ce_ltp=latest.get("ce_ltp")
+                )
+            except Exception:
+                overall_pnl = None
+            # Prefer total check; fallback to realized-only if overall not available
+            breached = False
+            if overall_pnl is not None:
+                breached = risk.total_loss_breached(overall_pnl=overall_pnl)
+                # Keep status in sync for Telegram /status
+                status["overall_pnl"] = overall_pnl
+            else:
+                breached = risk.daily_loss_breached()
+            if breached:
                 if state.get_leg("PE") or state.get_leg("CE"):
-                    strategy.square_off_all("daily loss limit breached")
+                    reason = "daily loss limit breached (total)" if overall_pnl is not None else "daily loss limit breached"
+                    strategy.square_off_all(reason)
                 time.sleep(poll_cfg.get("reconcile_interval_sec", 15))
                 continue
 
@@ -170,6 +188,11 @@ def main():
                     strategy.check_ce_roll(latest["ce_ltp"], latest["spot"])
                 if pe_leg and latest["pe_ltp"]:
                     strategy.check_pe_stop_loss(latest["pe_ltp"])
+                    # Smart PE profit booking — you asked for premium<entry or overall profit
+                    try:
+                        strategy.check_pe_take_profit(latest["pe_ltp"], ce_ltp=latest.get("ce_ltp"))
+                    except Exception as e:
+                        logger.error("PE take-profit check failed: %s", e)
                 if pe_pending and latest["pe_pending_ltp"]:
                     strategy.check_pending_pe_reentry(latest["pe_pending_ltp"], now)
 

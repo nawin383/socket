@@ -88,10 +88,24 @@ def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
         strategy.square_off_leg_if_near_expiry("PE", strategy.pe_cfg, now)
         strategy.square_off_leg_if_near_expiry("CE", strategy.ce_cfg, now)
 
-    if risk.daily_loss_breached():
-        if state.get_leg("PE") or state.get_leg("CE"):
-            strategy.square_off_all("daily loss limit breached")
-        return
+    # Total loss (realized + unrealized) — answers "today's loss or entire loss" (entire, including open)
+    try:
+        # Use latest quotes if available; otherwise fallback to realized-only
+        # We haven't fetched quotes yet, so try a lightweight overall via strategy helper
+        # It will fetch ltps for open legs if needed
+        overall, _, _ = strategy._get_overall_pnl_today()
+    except Exception:
+        overall = None
+    if overall is not None:
+        if risk.total_loss_breached(overall_pnl=overall):
+            if state.get_leg("PE") or state.get_leg("CE"):
+                strategy.square_off_all("daily loss limit breached (total)")
+            return
+    else:
+        if risk.daily_loss_breached():
+            if state.get_leg("PE") or state.get_leg("CE"):
+                strategy.square_off_all("daily loss limit breached")
+            return
 
     if not risk.trading_allowed(now):
         logger.info("Trading not allowed this run (outside hours, kill switch, or loss limit)")
@@ -115,6 +129,8 @@ def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
             keys.append(f"{pe_pending['exchange']}:{pe_pending['tradingsymbol']}")
         quotes = kite.ltp(keys)
 
+        ce_ltp = None
+        pe_ltp = None
         if ce_leg:
             spot = quotes[spot_symbol]["last_price"]
             ce_ltp = quotes[f"{ce_leg['exchange']}:{ce_leg['tradingsymbol']}"]["last_price"]
@@ -122,6 +138,11 @@ def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
         if pe_leg:
             pe_ltp = quotes[f"{pe_leg['exchange']}:{pe_leg['tradingsymbol']}"]["last_price"]
             strategy.check_pe_stop_loss(pe_ltp)
+            # Smart PE profit: premium < entry or overall profit
+            try:
+                strategy.check_pe_take_profit(pe_ltp, ce_ltp=ce_ltp)
+            except Exception as e:
+                logger.error("PE take-profit check failed: %s", e)
         if pe_pending:
             pe_pending_ltp = quotes[f"{pe_pending['exchange']}:{pe_pending['tradingsymbol']}"]["last_price"]
             strategy.check_pending_pe_reentry(pe_pending_ltp, now)

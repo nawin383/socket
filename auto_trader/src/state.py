@@ -53,6 +53,15 @@ CREATE TABLE IF NOT EXISTS sl_events (
     PRIMARY KEY (leg, trading_day)
 );
 
+CREATE TABLE IF NOT EXISTS tp_events (
+    leg TEXT NOT NULL,
+    trading_day TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    exit_price REAL NOT NULL,
+    time TEXT NOT NULL,
+    PRIMARY KEY (leg, trading_day)
+);
+
 CREATE TABLE IF NOT EXISTS pending_orders (
     leg TEXT PRIMARY KEY,
     order_id TEXT NOT NULL,
@@ -168,6 +177,23 @@ class StateStore:
         with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT 1 FROM sl_events WHERE leg = ? AND trading_day = ?", (leg, today)
+            ).fetchone()
+            return row is not None
+
+    def record_take_profit(self, leg: str, trading_day: str, entry_price: float, exit_price: float):
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO tp_events (leg, trading_day, entry_price, exit_price, time) "
+                "VALUES (?,?,?,?,?)",
+                (leg, trading_day, entry_price, exit_price, datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def take_profit_fired_today(self, leg: str) -> bool:
+        today = datetime.now().date().isoformat()
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM tp_events WHERE leg = ? AND trading_day = ?", (leg, today)
             ).fetchone()
             return row is not None
 

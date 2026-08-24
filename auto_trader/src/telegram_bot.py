@@ -112,6 +112,11 @@ class TelegramBot:
             "set_maxloss": self._cmd_set_maxloss,
             "set_maxrolls": self._cmd_set_maxrolls,
             "set_tolerance": self._cmd_set_tolerance,
+            # PE profit
+            "pe_profit": self._cmd_pe_profit,
+            "set_pe_profit": self._cmd_set_pe_profit,
+            "overall": self._cmd_overall,
+            "total": self._cmd_overall,
         }
 
     # ---------- lifecycle ----------
@@ -325,12 +330,19 @@ class TelegramBot:
             except Exception as e:
                 spot_str = f"error: {e}"
             hb = self.status_ref.get("last_heartbeat", "?")
+            # Overall PnL (realized + unrealized) — answers your MAXLOSS question
+            try:
+                overall, realized, unreal = self.strategy._get_overall_pnl_today()
+                overall_str = f"Real {realized:.0f} + Unreal {unreal:.0f} = Total {overall:.0f}"
+            except Exception:
+                overall_str = f"Real {today['realized_pnl']:.0f}"
+            tp_cfg = self.config['pe_leg'].get('take_profit', {})
             # Build
             lines = [
                 f"*🤖 Status — {now.strftime('%Y-%m-%d %H:%M:%S')}*",
                 f"Mode: `{mode}`  |  Kill-switch: `{'ON ⛔' if kill else 'OFF ✅'}`  |  Trading: `{'YES' if trading_allowed else 'NO'}`",
                 f"Spot ({self.config['underlying']['name']}): `{spot_str}`  |  Heartbeat: `{hb}`",
-                f"Today PnL: `Rs {today['realized_pnl']:.2f}`  |  Rolls: `{today['roll_count']}`  |  Last roll: `{today['last_roll_time'] or '-'}`",
+                f"Today PnL: `Rs {today['realized_pnl']:.2f}` ({overall_str})  |  Rolls: `{today['roll_count']}`  |  Last roll: `{today['last_roll_time'] or '-'}`",
                 "",
                 f"*PE Leg* ({'ON' if self.config['pe_leg'].get('enabled') else 'OFF'}): " + (
                     f"`{pe['tradingsymbol']} {pe['strike']:.0f} x{pe['quantity']} @ {pe['entry_price']:.2f} ({pe['entry_time'][:16]})`" if pe else "_flat — will enter when criteria met_"
@@ -339,9 +351,9 @@ class TelegramBot:
                     f"`{ce['tradingsymbol']} {ce['strike']:.0f} x{ce['quantity']} @ {ce['entry_price']:.2f} ({ce['entry_time'][:16]})`" if ce else "_flat_"
                 ),
                 "",
-                f"Quantities: PE `{self.config['pe_leg']['quantity_lots']} lots`  CE `{self.config['ce_leg']['quantity_lots']} lots`  Lot: `{self.store.lot_size(self.config['underlying']['name'])}`",
-                f"Targets: PE `Rs{self.config['pe_leg']['target_premium']}`  CE `Rs{self.config['ce_leg']['target_premium']}`  CE exit `<Rs{self.config['ce_leg']['exit_premium_threshold']}`",
-                f"Risk: SL PE `+{self.config['pe_leg']['stop_loss'].get('trigger_pct', 40)}%`  MaxLoss `Rs{self.config['risk']['max_daily_loss']}`  MaxRolls `{self.config['ce_leg']['max_rolls_per_day']}`",
+                f"Quantities: PE `{self.config['pe_leg']['quantity_lots']} lots`  CE `{self.config['ce_leg']['quantity_lots']} lots`  Actual CE qty preserved on roll (exit all → re-enter same qty)  Lot: `{self.store.lot_size(self.config['underlying']['name'])}` (real from Zerodha, not 75)",
+                f"Targets: PE `Rs{self.config['pe_leg']['target_premium']}` (±{self.config['pe_leg']['premium_tolerance']}, ±{self.config['pe_leg']['strike_search_range']})  CE `Rs{self.config['ce_leg']['target_premium']}` (±{self.config['ce_leg']['premium_tolerance']}, ±{self.config['ce_leg']['strike_search_range']} → ATM±100)  CE exit `<Rs{self.config['ce_leg']['exit_premium_threshold']}`",
+                f"Risk: SL PE `+{self.config['pe_leg']['stop_loss'].get('trigger_pct', 40)}%`  PE TP `{tp_cfg.get('trigger_pct',15)}%` (min {tp_cfg.get('min_profit_points',20)}pts, overall>{tp_cfg.get('require_overall_profit',True)})  MaxLoss `Rs{self.config['risk']['max_daily_loss']}` (total, not just realized)  MaxRolls `{self.config['ce_leg']['max_rolls_per_day']}`",
             ]
             return "\n".join(lines)
         except Exception as e:
@@ -407,9 +419,15 @@ class TelegramBot:
     def _cmd_pnl(self, args, chat_id, raw_msg):
         try:
             today = self.state.today_state()
+            try:
+                overall, realized, unreal = self.strategy._get_overall_pnl_today()
+                overall_line = f"Overall (real {realized:.0f} + unreal {unreal:.0f}) = `{overall:.2f}`"
+            except Exception:
+                overall_line = f"Overall: error computing"
             lines = [
                 f"*💰 Today ({today['trading_day']})*",
                 f"Realized PnL: `Rs {today['realized_pnl']:.2f}`",
+                f"{overall_line}",
                 f"Roll count: `{today['roll_count']}`",
                 f"Last roll: `{today['last_roll_time'] or '-'}`",
             ]
@@ -457,13 +475,15 @@ class TelegramBot:
 
     def _cmd_config(self, args, chat_id, raw_msg):
         try:
-            # Compact view
             cfg = self.config
+            tp = cfg['pe_leg'].get('take_profit', {})
+            lot = self.store.lot_size(cfg['underlying']['name'])
             txt = (
                 f"*⚙️ Config* (mode `{cfg.get('mode')}`)\n"
-                f"PE: enabled={cfg['pe_leg']['enabled']} target={cfg['pe_leg']['target_premium']}±{cfg['pe_leg']['premium_tolerance']} SL={cfg['pe_leg']['stop_loss'].get('trigger_pct')}% qty={cfg['pe_leg']['quantity_lots']} lots expiry={cfg['pe_leg']['expiry_type']}\n"
-                f"CE: enabled={cfg['ce_leg']['enabled']} target={cfg['ce_leg']['target_premium']}±{cfg['ce_leg']['premium_tolerance']} exit<{cfg['ce_leg']['exit_premium_threshold']} qty={cfg['ce_leg']['quantity_lots']} lots maxRolls={cfg['ce_leg']['max_rolls_per_day']}\n"
-                f"Risk: loss={cfg['risk']['max_daily_loss']} {cfg['risk']['trading_start']}-{cfg['risk']['trading_end']} EOD={cfg['risk']['eod_square_off_time']} kill={cfg['risk']['kill_switch_file']}\n"
+                f"PE: enabled={cfg['pe_leg']['enabled']} target={cfg['pe_leg']['target_premium']}±{cfg['pe_leg']['premium_tolerance']} range {cfg['pe_leg']['strike_search_range']} SL={cfg['pe_leg']['stop_loss'].get('trigger_pct')}% "
+                f"TP={tp.get('trigger_pct',15)}% (min {tp.get('min_profit_points',20)}pts, overall>{tp.get('require_overall_profit',True)}) qty={cfg['pe_leg']['quantity_lots']} lots (lot {lot}) expiry={cfg['pe_leg']['expiry_type']}\n"
+                f"CE: enabled={cfg['ce_leg']['enabled']} target={cfg['ce_leg']['target_premium']}±{cfg['ce_leg']['premium_tolerance']} range {cfg['ce_leg']['strike_search_range']} (ATM±100) exit<{cfg['ce_leg']['exit_premium_threshold']} qty={cfg['ce_leg']['quantity_lots']} lots (roll preserves qty) maxRolls={cfg['ce_leg']['max_rolls_per_day']}\n"
+                f"Risk: loss={cfg['risk']['max_daily_loss']} (total=real+unreal) {cfg['risk']['trading_start']}-{cfg['risk']['trading_end']} EOD={cfg['risk']['eod_square_off_time']} kill={cfg['risk']['kill_switch_file']}\n"
                 f"Orders: buffer={cfg['orders']['slippage_buffer_pct']}% timeout={cfg['orders']['order_fill_timeout_sec']}s fallback={cfg['orders']['fallback_to_market']}"
             )
             return txt
@@ -473,11 +493,19 @@ class TelegramBot:
     def _cmd_risk(self, args, chat_id, raw_msg):
         try:
             now = datetime.now()
+            try:
+                overall, real, unreal = self.strategy._get_overall_pnl_today()
+                overall_str = f"total {overall:.0f} (real {real:.0f}+unreal {unreal:.0f})"
+                total_breached = self.risk.total_loss_breached(overall_pnl=overall)
+            except Exception:
+                overall_str = "overall error"
+                total_breached = self.risk.daily_loss_breached()
             lines = [
                 f"*🛡️ Risk @ {now.strftime('%H:%M:%S')}*",
                 f"Trading day: `{self.risk.is_trading_day(now)}`  Market open: `{self.risk.is_market_open(now)}`  EOD flag: `{self.risk.is_eod_square_off_time(now)}`",
                 f"Kill switch: `{'ON ⛔' if self.risk.kill_switch_active() else 'OFF ✅'} ({self.kill_switch_path})`",
-                f"Daily loss breached: `{self.risk.daily_loss_breached()}`  Trading allowed: `{self.risk.trading_allowed(now)}`",
+                f"Realized loss breached: `{self.risk.daily_loss_breached()}`  Total loss breached: `{total_breached}`  Trading allowed: `{self.risk.trading_allowed(now)}`",
+                f"Overall PnL now: `{overall_str}`  Limit: `-Rs{self.risk.max_daily_loss}` (total, not just realized)",
                 f"Holidays: `{self.risk.holidays or 'none'}`",
                 f"Orders mode: `{self.orders.mode}`",
             ]
@@ -511,6 +539,81 @@ class TelegramBot:
                 return "\n".join(lines)
         except Exception as e:
             return f"⚠️ /history failed: {e}"
+
+    def _cmd_pe_profit(self, args, chat_id, raw_msg):
+        try:
+            tp = self.config['pe_leg'].get('take_profit', {})
+            leg = self.state.get_leg("PE")
+            status = f"PE leg: {'flat' if not leg else leg['tradingsymbol']+' @'+str(leg['entry_price'])}"
+            if leg:
+                try:
+                    pe_ltp = self.strategy._quote_ltp(leg['exchange'], leg['tradingsymbol'])
+                    trigger = round(leg['entry_price'] * (1 - tp.get('trigger_pct',15)/100.0),2)
+                    profit_pts = leg['entry_price'] - pe_ltp
+                    overall, _, _ = self.strategy._get_overall_pnl_today(pe_ltp=pe_ltp)
+                    status += f"\nLTP: {pe_ltp:.2f}  Trigger: {trigger:.2f}  Profit pts: {profit_pts:.2f}  Overall: {overall:.2f}"
+                except Exception as e:
+                    status += f"\nLTP error: {e}"
+            return (
+                f"*📈 PE Take-Profit* (smart booking)\n"
+                f"Enabled: `{tp.get('enabled', True)}`  Trigger: `{tp.get('trigger_pct',15)}%` below entry (min {tp.get('min_profit_points',20)}pts)\n"
+                f"Require overall>0: `{tp.get('require_overall_profit',True)}`  Reentry next day: `{tp.get('allow_reentry_next_day',True)}`\n"
+                f"{status}\n"
+                f"Logic: Book if pe_ltp ≤ entry×(1-trigger%) AND (entry-pe_ltp)≥min_pts AND (overall>0 if required). See strategy.py:check_pe_take_profit"
+            )
+        except Exception as e:
+            return f"⚠️ /pe_profit failed: {e}"
+
+    def _cmd_set_pe_profit(self, args, chat_id, raw_msg):
+        # Usage: /set_pe_profit 15  or /set_pe_profit 15 20  (pct pts)  or /set_pe_profit off/on
+        tp = self.config['pe_leg'].setdefault('take_profit', {})
+        if not args:
+            return f"PE TP: enabled={tp.get('enabled',True)} trigger={tp.get('trigger_pct',15)}% min_pts={tp.get('min_profit_points',20)} overall>{tp.get('require_overall_profit',True)}\nUsage: `/set_pe_profit 15` or `/set_pe_profit off` `/set_pe_profit 12 30`"
+        if args[0].lower() in ("off","disable","false"):
+            tp['enabled']=False; self._save_config(); return "✅ PE take-profit *disabled*"
+        if args[0].lower() in ("on","enable","true"):
+            tp['enabled']=True; self._save_config(); return "✅ PE take-profit *enabled*"
+        try:
+            pct = int(args[0])
+            if not 5 <= pct <= 50:
+                return "Pct must be 5..50"
+            tp['trigger_pct']=pct
+            if len(args)>=2 and args[1].isdigit():
+                tp['min_profit_points']=int(args[1])
+            self._save_config()
+            self.notifier.send(f"PE TP set to {pct}% by Telegram ({chat_id})")
+            return f"✅ PE TP trigger: *{pct}%* (min {tp.get('min_profit_points',20)}pts)"
+        except Exception as e:
+            return f"⚠️ failed: {e}"
+
+    def _cmd_overall(self, args, chat_id, raw_msg):
+        try:
+            overall, real, unreal = self.strategy._get_overall_pnl_today()
+            pe = self.state.get_leg("PE")
+            ce = self.state.get_leg("CE")
+            lines = [
+                f"*📊 Overall PnL Today*",
+                f"Realized: `Rs {real:.2f}`",
+                f"Unrealized: `Rs {unreal:.2f}`",
+                f"Overall (real+unreal): `Rs {overall:.2f}`",
+                f"MAXLOSS limit: `-Rs{self.risk.max_daily_loss}` (total breached? `{self.risk.total_loss_breached(overall_pnl=overall)}`)",
+                f"Realized breached? `{self.risk.daily_loss_breached()}`",
+            ]
+            if pe:
+                try:
+                    ltp = self.strategy._quote_ltp(pe['exchange'], pe['tradingsymbol'])
+                    lines.append(f"PE {pe['tradingsymbol']} unreal {(pe['entry_price']-ltp)*pe['quantity']:.0f} (entry {pe['entry_price']:.2f} ltp {ltp:.2f})")
+                except Exception:
+                    pass
+            if ce:
+                try:
+                    ltp = self.strategy._quote_ltp(ce['exchange'], ce['tradingsymbol'])
+                    lines.append(f"CE {ce['tradingsymbol']} unreal {(ce['entry_price']-ltp)*ce['quantity']:.0f}")
+                except Exception:
+                    pass
+            return "\n".join(lines)
+        except Exception as e:
+            return f"⚠️ /overall failed: {e}"
 
     # ---------- CONTROL ----------
     def _cmd_pause(self, args, chat_id, raw_msg):
@@ -806,40 +909,35 @@ class TelegramBot:
     # ---------- HELP ----------
     def _cmd_help(self, args, chat_id, raw_msg):
         return (
-            "*🤖 Telegram Control — Commands*\n"
-            "Only this chat ID is authorized.\n"
-            "\n*Monitor (read-only):*\n"
-            "`/status` — full snapshot (spot, legs, PnL, rolls, kill switch, mode)\n"
-            "`/positions` — broker net vs state legs, highlight mismatch\n"
-            "`/legs` — PE/CE leg detail + live LTP & unrealized PnL\n"
-            "`/pnl` — today realized PnL + last 5 rolls\n"
-            "`/spot` — Nifty spot LTP\n"
-            "`/quote EXCHANGE:SYMBOL` — e.g. `/quote NFO:NIFTY24JUN22500CE`\n"
-            "`/config` — compact config dump\n"
-            "`/risk` — trading hours, kill switch, loss breach, market open\n"
-            "`/health` — heartbeat & mode\n"
-            "`/history [N]` — last N rolls (default 10)\n"
-            "\n*Control (halt / resume / square off):*\n"
-            "`/pause` — ⛔ create STOP_TRADING → no new entries/rolls (keeps positions)\n"
-            "`/resume` — ✅ remove STOP_TRADING → allow entries/rolls again\n"
-            "`/stop` — 🛑 square off ALL legs at market + pause (hard stop)\n"
-            "`/squareoff PE|CE|ALL` — square off that leg only (keep pause state)\n"
-            "`/flatten` — alias for `/stop`\n"
-            "`/reconcile` — re-adopt broker shorts into state if you squared off manually\n"
-            "\n*Mode & Qty (live vs paper):*\n"
-            "`/mode` — show current\n"
-            "`/mode paper` — switch to paper (simulated fills)\n"
-            "`/mode live confirm` — switch to LIVE (real money) — needs `confirm`\n"
-            "`/qty` — show lots\n"
-            "`/qty 2` — set both legs to 2 lots (next entry)\n"
-            "`/qty pe 1` / `/qty ce 2` — set single leg\n"
-            "\n*Enable / Disable legs:*\n"
-            "`/enable_pe` / `/disable_pe`   `/enable_ce` / `/disable_ce`\n"
-            "\n*Tuning (persisted to config.yaml):*\n"
+            "*🤖 Telegram Control — 28+ Commands*\n"
+            "Only your chat is authorized. Works on VPS (<3s) and Free Actions (≤5 min, 02-10 UTC).\n"
+            "\n*Monitor:*\n"
+            "`/status` — full snapshot (overall PnL = real+unreal, PE TP, CE 2-strike)\n"
+            "`/positions` — broker vs state, mismatch alert\n"
+            "`/legs` — PE/CE detail + live LTP & unreal\n"
+            "`/pnl` — today real + overall + last 5 rolls\n"
+            "`/overall` / `/total` — overall today (real+unreal) vs MAXLOSS\n"
+            "`/spot` — Nifty spot 256265\n"
+            "`/quote NFO:SYMBOL` — e.g. `/quote NFO:NIFTY24JUN22500CE`\n"
+            "`/config` — compact config (PE TP, CE 2-strike, lot real)\n"
+            "`/risk` — hours, kill, real vs total breach, overall PnL\n"
+            "`/pe_profit` — PE take-profit config & trigger status\n"
+            "`/health` — heartbeat & mode  `/history [N]` — last N rolls\n"
+            "\n*Control:*\n"
+            "`/pause` — ⛔ STOP_TRADING → no new entries/rolls (keep positions)\n"
+            "`/resume` — ✅ remove STOP_TRADING\n"
+            "`/stop`/`/flatten` — 🛑 square ALL + pause\n"
+            "`/squareoff PE|CE|ALL` — close one/both (qty = actual position qty)\n"
+            "`/reconcile` — re-adopt broker shorts\n"
+            "\n*Mode & Qty (qty = real lot from Zerodha, roll preserves qty):*\n"
+            "`/mode` / `/mode paper` / `/mode live confirm`\n"
+            "`/qty` `/qty 2` (both) `/qty pe 1` `/qty ce 2` — next entry lots; roll uses same qty as closed leg\n"
+            "\n*Enable/Disable:*\n"
+            "`/enable_pe` `/disable_pe`  `/enable_ce` `/disable_ce`\n"
+            "\n*Tuning (persisted):*\n"
             "`/set_pe_target 700`  `/set_ce_target 120`  `/set_ce_exit 90`\n"
-            "`/set_sl 40` (PE SL +%)  `/set_maxloss 15000`  `/set_maxrolls 15`  `/set_tolerance pe 60`\n"
-            "\n*Tips:*\n"
-            "• To stay flat after manual square-off, `/pause` *before* you square off in Kite, or run `/stop` here.\n"
-            "• `paper` mode is safe to test qty/target changes.\n"
-            "• Commands work only on VPS (`main.py`); GitHub Actions poller has no Telegram bot.\n"
+            "`/set_sl 40`  `/set_pe_profit 15` (PE TP % + min 20pts, overall>0)  `/set_maxloss 15000` (total)\n"
+            "`/set_maxrolls 15`  `/set_tolerance pe 60`\n"
+            "\n*Lot & Premium:* CE picks closest of ATM±2 (5 strikes, ±100) to Rs120 — whichever feasible; `lot_size` is real from kite.instruments, not 75.\n"
+            "*MAXLOSS:* now total (real+unreal) via `total_loss_breached` — covers closed + open, not just realized.\n"
         )
