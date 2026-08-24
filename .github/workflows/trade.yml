@@ -55,6 +55,19 @@ jobs:
           pip install -e .
           pip install -r auto_trader/requirements.txt
 
+      - name: Handle Telegram commands (free, no VPS — /pause /resume /status etc every 5 min)
+        working-directory: auto_trader
+        continue-on-error: true
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
+          KITE_PASSWORD: ${{ secrets.KITE_PASSWORD }}
+          KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m src.telegram_poll
+
       - name: Run one poll cycle
         working-directory: auto_trader
         env:
@@ -77,11 +90,15 @@ jobs:
             curl -fsS -m 10 "${{ vars.HEALTHCHECKS_PING_URL }}/fail"
           fi
 
-      - name: Commit updated trading state
+      - name: Commit updated trading state (+ Telegram offset / kill-switch / config)
         if: always()
         run: |
           git config user.name "kite-auto-trader-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add auto_trader/data/state.db
+          git add auto_trader/data/state.db || true
+          git add auto_trader/data/telegram_offset.txt || true
+          git add auto_trader/data/STOP_TRADING || true
+          git add auto_trader/config/config.yaml || true
+          # Also add state.db that telegram_poll may have updated (reconcile)
           git diff --cached --quiet || git commit -m "state: automated update [skip ci]"
           git push

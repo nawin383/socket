@@ -68,6 +68,9 @@ class TelegramBot:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._offset = 0
+        # Offset file for GitHub Actions persistence (free, no VPS) — survives via git
+        self.offset_file = self.kill_switch_path.parent / "telegram_offset.txt"
+        self._load_offset()
 
         # Map command -> handler
         self.handlers = {
@@ -178,6 +181,76 @@ class TelegramBot:
             except Exception as e:
                 logger.error("Telegram poll loop error: %s", e)
                 time.sleep(5)
+
+    # ---------- Actions single-shot (free, no VPS) ----------
+    def _load_offset(self):
+        try:
+            if self.offset_file.exists():
+                txt = self.offset_file.read_text().strip()
+                if txt:
+                    self._offset = int(txt)
+                    logger.info("Loaded telegram offset %s from %s", self._offset, self.offset_file)
+        except Exception as e:
+            logger.warning("Failed to load telegram offset: %s", e)
+            self._offset = 0
+
+    def _save_offset(self):
+        try:
+            self.offset_file.parent.mkdir(parents=True, exist_ok=True)
+            self.offset_file.write_text(str(self._offset))
+        except Exception as e:
+            logger.warning("Failed to save telegram offset: %s", e)
+
+    def process_one_batch(self, timeout: int = 0) -> int:
+        """Single-shot poll for GitHub Actions (free, no VPS). Fetches one batch, handles, saves offset."""
+        if not self.bot_token or not self.allowed_chat_id:
+            logger.info("Telegram process_one_batch skipped: bot_token or chat_id missing")
+            return 0
+        self._load_offset()
+        base_url = f"https://api.telegram.org/bot{self.bot_token}"
+        try:
+            resp = requests.get(
+                f"{base_url}/getUpdates",
+                params={"offset": self._offset, "timeout": timeout, "allowed_updates": json.dumps(["message"])},
+                timeout=timeout + 10,
+            )
+            if resp.status_code != 200:
+                logger.warning("Telegram getUpdates %s: %s", resp.status_code, resp.text[:200])
+                return 0
+            data = resp.json()
+            if not data.get("ok"):
+                logger.warning("Telegram getUpdates not ok: %s", data)
+                return 0
+            results = data.get("result", [])
+            if not results:
+                logger.info("Telegram: no new messages (offset %s)", self._offset)
+                return 0
+            handled = 0
+            for upd in results:
+                self._offset = upd["update_id"] + 1
+                msg = upd.get("message") or upd.get("edited_message")
+                if not msg:
+                    continue
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+                if chat_id != self.allowed_chat_id:
+                    logger.warning("Ignoring message from unauthorized chat %s", chat_id)
+                    continue
+                text = (msg.get("text") or "").strip()
+                if not text.startswith("/"):
+                    continue
+                if "@" in text:
+                    first, *rest = text.split()
+                    first = first.split("@")[0]
+                    text = " ".join([first] + rest)
+                logger.info("Actions Telegram handling: %s from %s", text, chat_id)
+                self._handle_message(chat_id, text, msg)
+                handled += 1
+            self._save_offset()
+            logger.info("Telegram batch done: %s messages, new offset %s", handled, self._offset)
+            return handled
+        except Exception as e:
+            logger.error("Telegram process_one_batch error: %s", e)
+            return 0
 
     def _handle_message(self, chat_id: str, text: str, raw_msg: dict):
         parts = text.strip().split()
