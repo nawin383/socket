@@ -1,0 +1,552 @@
+<title>Roll Engine Blueprint</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --ink: #1c2321;
+    --ink-soft: #4b524e;
+    --surface: #f2f1eb;
+    --panel: #ffffff;
+    --panel-edge: #d9d6ca;
+    --line: #8f8b7d;
+    --accent: #a8672a;
+    --accent-soft: #f0dcc2;
+    --danger: #a8483d;
+    --success: #3d7a54;
+    --focus: #2e6e9e;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #e9ece7;
+      --ink-soft: #aab0a8;
+      --surface: #14181a;
+      --panel: #1b2123;
+      --panel-edge: #384040;
+      --line: #6b746f;
+      --accent: #e2a55c;
+      --accent-soft: #3a2f1f;
+      --danger: #e0897c;
+      --success: #86c69a;
+      --focus: #7fb2dd;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ink: #e9ece7;
+    --ink-soft: #aab0a8;
+    --surface: #14181a;
+    --panel: #1b2123;
+    --panel-edge: #384040;
+    --line: #6b746f;
+    --accent: #e2a55c;
+    --accent-soft: #3a2f1f;
+    --danger: #e0897c;
+    --success: #86c69a;
+    --focus: #7fb2dd;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--surface);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    line-height: 1.55;
+    padding: 0 24px 96px;
+  }
+
+  main {
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  .masthead {
+    max-width: 700px;
+    margin: 72px auto 56px;
+  }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+
+  h1 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-weight: 600;
+    font-size: clamp(2rem, 4vw, 2.7rem);
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 20px;
+  }
+
+  .masthead p {
+    font-size: 1.05rem;
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin: 0 0 12px;
+  }
+
+  .status-row {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-top: 24px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+  }
+
+  .status-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-soft);
+  }
+
+  .swatch { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+  .swatch.built { background: var(--ink); }
+  .swatch.pending { background: transparent; border: 1.5px dashed var(--line); }
+  .swatch.action { background: var(--accent); }
+
+  section.block {
+    margin: 64px 0;
+    padding-top: 40px;
+    border-top: 1px solid var(--panel-edge);
+  }
+
+  .block-head {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    gap: 18px;
+    max-width: 780px;
+    margin-bottom: 28px;
+  }
+
+  .block-num {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    color: var(--ink-soft);
+    padding-top: 4px;
+  }
+
+  h2 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-weight: 600;
+    font-size: 1.5rem;
+    margin: 0 0 10px;
+    text-wrap: balance;
+  }
+
+  .block-head p {
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 66ch;
+  }
+
+  figure {
+    margin: 0;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 6px;
+    padding: 28px 20px 20px;
+  }
+
+  .diagram-scroll {
+    overflow-x: auto;
+  }
+
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+
+  svg text { font-family: "IBM Plex Mono", monospace; fill: currentColor; }
+  svg .label-sans { font-family: "IBM Plex Sans", sans-serif; }
+
+  figcaption {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--panel-edge);
+  }
+
+  .node-fill { fill: var(--panel); }
+  .node-stroke { stroke: var(--ink); }
+  .pending-stroke { stroke: var(--line); stroke-dasharray: 6 5; }
+  .band-label { fill: var(--ink-soft); }
+  .arrow-line { stroke: var(--ink); fill: none; }
+  .arrow-accent { stroke: var(--accent); fill: none; }
+  .arrow-label { fill: var(--ink-soft); }
+  .accent-text { fill: var(--accent); }
+  .accent-node { fill: var(--accent-soft); stroke: var(--accent); }
+
+  .takeaway {
+    margin-top: 64px;
+    padding: 28px 26px;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    max-width: 780px;
+  }
+  .takeaway p { margin: 0 0 10px; color: var(--ink-soft); }
+  .takeaway p:last-child { margin-bottom: 0; }
+  .takeaway strong { color: var(--ink); font-weight: 600; }
+
+  code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.92em;
+    background: var(--accent-soft);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+</style>
+
+<main>
+  <div class="masthead">
+    <p class="eyebrow">auto_trader — system map</p>
+    <h1>Roll Engine Blueprint</h1>
+    <p>How the Nifty PE/CE bot actually works end to end: where the daily login goes, how a tick becomes a roll decision, and what happens across a trading day — before any hosting choice gets bolted on.</p>
+    <div class="status-row">
+      <span class="status-chip"><span class="swatch built"></span>solid = built &amp; tested (PR #2)</span>
+      <span class="status-chip"><span class="swatch pending"></span>dashed = hosting not yet decided</span>
+      <span class="status-chip"><span class="swatch action"></span>amber = the actual trade action</span>
+    </div>
+  </div>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">01</span>
+      <div>
+        <h2>System architecture</h2>
+        <p>Everything inside the dashed box is code that already exists and runs the same way regardless of where it's hosted — that box is the only thing an infra decision changes.</p>
+      </div>
+    </div>
+    <figure>
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1200 800" role="img" aria-label="Architecture diagram: Zerodha's login pages, Connect REST API and WebSocket feed at the top connect down into a dashed 'always-on host' box containing auth.py, the kiteconnect client, the kite_websocket ticker, risk.py, strategy.py, order_manager.py, state.py, notifier.py and health.py; strategy.py's sell and buy signals flow in amber through order_manager.py back up to the Connect REST API; at the bottom, notifier.py alerts the user's phone via Telegram and health.py is polled by an external uptime monitor which also alerts the phone.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+            </marker>
+            <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" class="accent-text" />
+            </marker>
+          </defs>
+
+          <!-- Band A: Zerodha -->
+          <text x="600" y="26" text-anchor="middle" class="band-label label-sans" font-size="12" letter-spacing="1.5">ZERODHA — EXTERNAL</text>
+          <g class="node-stroke" stroke-width="1.4">
+            <rect class="node-fill" x="165" y="40" width="210" height="72" rx="4"/>
+            <rect class="node-fill" x="495" y="40" width="210" height="72" rx="4"/>
+            <rect class="node-fill" x="825" y="40" width="210" height="72" rx="4"/>
+          </g>
+          <g text-anchor="middle" font-size="13" font-weight="500">
+            <text x="270" y="72">Login pages</text>
+            <text x="270" y="88" font-size="11" fill="var(--ink-soft)">kite.zerodha.com</text>
+            <text x="600" y="72">Kite Connect REST</text>
+            <text x="600" y="88" font-size="11" fill="var(--ink-soft)">orders · quotes · instruments</text>
+            <text x="930" y="72">Kite WebSocket feed</text>
+            <text x="930" y="88" font-size="11" fill="var(--ink-soft)">ws.kite.trade</text>
+          </g>
+
+          <!-- Band B: host (pending) -->
+          <rect x="40" y="150" width="1120" height="410" rx="6" fill="none" class="pending-stroke" stroke-width="1.6"/>
+          <text x="60" y="140" class="band-label label-sans" font-size="12" letter-spacing="1">ALWAYS-ON HOST — hosting not yet decided</text>
+
+          <!-- row 1 -->
+          <g class="node-stroke" stroke-width="1.3">
+            <rect class="node-fill" x="165" y="180" width="210" height="78" rx="4"/>
+            <rect class="node-fill" x="495" y="180" width="210" height="78" rx="4"/>
+            <rect class="node-fill" x="825" y="180" width="210" height="78" rx="4"/>
+          </g>
+          <g text-anchor="middle" font-size="13" font-weight="500">
+            <text x="270" y="212">auth.py</text>
+            <text x="270" y="230" font-size="11" fill="var(--ink-soft)">daily TOTP login</text>
+            <text x="600" y="212">kiteconnect client</text>
+            <text x="600" y="230" font-size="11" fill="var(--ink-soft)">official SDK, REST</text>
+            <text x="930" y="212">kite_websocket</text>
+            <text x="930" y="230" font-size="11" fill="var(--ink-soft)">this repo's ticker</text>
+          </g>
+
+          <!-- row 2 -->
+          <g class="node-stroke" stroke-width="1.3">
+            <rect class="node-fill" x="165" y="330" width="210" height="78" rx="4"/>
+            <rect class="node-fill" x="495" y="330" width="210" height="78" rx="4"/>
+            <rect class="node-fill" x="825" y="330" width="210" height="78" rx="4"/>
+          </g>
+          <g text-anchor="middle" font-size="13" font-weight="500">
+            <text x="270" y="362">risk.py</text>
+            <text x="270" y="380" font-size="11" fill="var(--ink-soft)">hours · loss cap · kill switch</text>
+            <text x="600" y="362">strategy.py</text>
+            <text x="600" y="380" font-size="11" fill="var(--ink-soft)">PE anchor + CE roll logic</text>
+            <text x="930" y="362">order_manager.py</text>
+            <text x="930" y="380" font-size="11" fill="var(--ink-soft)">limit → market fallback</text>
+          </g>
+
+          <!-- row 3 -->
+          <g class="node-stroke" stroke-width="1.3">
+            <rect class="node-fill" x="165" y="470" width="210" height="72" rx="4"/>
+            <rect class="node-fill" x="495" y="470" width="210" height="72" rx="4"/>
+            <rect class="node-fill" x="825" y="470" width="210" height="72" rx="4"/>
+          </g>
+          <g text-anchor="middle" font-size="13" font-weight="500">
+            <text x="270" y="500">state.py</text>
+            <text x="270" y="517" font-size="11" fill="var(--ink-soft)">SQLite: legs, rolls, P&amp;L</text>
+            <text x="600" y="500">notifier.py</text>
+            <text x="600" y="517" font-size="11" fill="var(--ink-soft)">Telegram alerts</text>
+            <text x="930" y="500">health.py</text>
+            <text x="930" y="517" font-size="11" fill="var(--ink-soft)">:8080 heartbeat</text>
+          </g>
+
+          <!-- vertical arrows band A <-> row1 -->
+          <g class="arrow-line" stroke-width="1.3">
+            <line x1="270" y1="180" x2="270" y2="112" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+            <line x1="600" y1="180" x2="600" y2="112" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+            <line x1="930" y1="180" x2="930" y2="112" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+          </g>
+          <g text-anchor="middle" font-size="10.5" class="arrow-label">
+            <text x="270" y="152">login+TOTP ⇄</text>
+            <text x="270" y="164">request_token</text>
+            <text x="600" y="152">quotes · orders</text>
+            <text x="600" y="164">⇄ fills</text>
+            <text x="930" y="152">subscribe ⇄</text>
+            <text x="930" y="164">live LTP ticks</text>
+          </g>
+
+          <!-- auth.py -> kiteconnect client (row1, adjacent) -->
+          <line x1="375" y1="219" x2="495" y2="219" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow)"/>
+          <text x="435" y="212" text-anchor="middle" font-size="10.5" class="arrow-label">access_token</text>
+
+          <!-- auth.py -> kite_websocket (row1, skip col2 via top channel) -->
+          <path d="M375,198 V166 H930 V180" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"/>
+          <text x="650" y="160" text-anchor="middle" font-size="10.5" class="arrow-label">access_token</text>
+
+          <!-- row1 -> row2 -->
+          <line x1="600" y1="258" x2="600" y2="330" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow)"/>
+          <text x="612" y="298" font-size="10.5" class="arrow-label">quotes for strike search</text>
+
+          <path d="M930,258 L640,325" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"/>
+          <text x="800" y="295" text-anchor="middle" font-size="10.5" class="arrow-label">spot + CE ticks</text>
+
+          <line x1="375" y1="369" x2="495" y2="369" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow)"/>
+          <text x="435" y="362" text-anchor="middle" font-size="10.5" class="arrow-label">trading_allowed()</text>
+
+          <!-- strategy -> order_manager: THE trade action, accent -->
+          <line x1="705" y1="369" x2="825" y2="369" class="arrow-accent" stroke-width="2" marker-end="url(#arrow-accent)"/>
+          <text x="765" y="362" text-anchor="middle" font-size="10.5" class="accent-text">sell / buy signal</text>
+
+          <!-- order_manager -> Connect REST (elbow routed through column gaps, accent, THE order) -->
+          <path d="M930,330 V300 H765 V150 H560 V112" class="arrow-accent" stroke-width="2" fill="none" marker-end="url(#arrow-accent)"/>
+          <text x="662" y="144" text-anchor="middle" font-size="11" class="accent-text" font-weight="600">place_order()</text>
+
+          <!-- row2 -> row3 -->
+          <line x1="600" y1="408" x2="600" y2="470" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+          <text x="612" y="442" font-size="10.5" class="arrow-label">legs · rolls · P&amp;L</text>
+
+          <path d="M600,408 L640,470" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)" transform="translate(0,0)"/>
+          <line x1="655" y1="408" x2="600" y2="470" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"/>
+          <text x="700" y="440" text-anchor="middle" font-size="10.5" class="arrow-label">trade event text</text>
+
+          <path d="M960,408 Q1010,440 960,470" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"/>
+          <text x="1030" y="445" text-anchor="middle" font-size="10.5" class="arrow-label">heartbeat</text>
+          <text x="1030" y="458" text-anchor="middle" font-size="10.5" class="arrow-label">every 15s</text>
+
+          <!-- Band C: you + monitoring -->
+          <text x="600" y="600" text-anchor="middle" class="band-label label-sans" font-size="12" letter-spacing="1.5">YOU &amp; EXTERNAL MONITORING</text>
+          <g class="node-stroke" stroke-width="1.4">
+            <rect class="node-fill" x="330" y="620" width="230" height="76" rx="4"/>
+            <rect class="node-fill" x="660" y="620" width="230" height="76" rx="4"/>
+          </g>
+          <g text-anchor="middle" font-size="13" font-weight="500">
+            <text x="445" y="654">Your phone</text>
+            <text x="445" y="672" font-size="11" fill="var(--ink-soft)">Telegram alerts</text>
+            <text x="775" y="654">Uptime monitor</text>
+            <text x="775" y="672" font-size="11" fill="var(--ink-soft)">e.g. UptimeRobot, external</text>
+          </g>
+
+          <line x1="600" y1="542" x2="470" y2="620" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow)"/>
+          <text x="500" y="586" text-anchor="middle" font-size="10.5" class="arrow-label">entries · rolls · errors</text>
+
+          <line x1="930" y1="542" x2="800" y2="620" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow)"/>
+          <text x="915" y="586" text-anchor="middle" font-size="10.5" class="arrow-label">GET /health</text>
+          <text x="915" y="598" text-anchor="middle" font-size="10.5" class="arrow-label">every 1–5 min</text>
+
+          <path d="M660,658 H560" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"/>
+          <text x="610" y="650" text-anchor="middle" font-size="10.5" class="arrow-label">push if down</text>
+        </svg>
+      </div>
+      <figcaption>Amber path = the only path that moves real money: strategy.py's roll decision, through order_manager.py, to Kite's order API. Everything else is monitoring, bookkeeping, or the daily login.</figcaption>
+    </figure>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">02</span>
+      <div>
+        <h2>How a CE roll decision gets made</h2>
+        <p>This is the exact check that runs on every tick — <code>strategy.py::check_ce_roll()</code> — the mechanism behind "auto switch the position."</p>
+      </div>
+    </div>
+    <figure>
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1300 440" role="img" aria-label="Flowchart: a new CE tick arrives with premium and spot price. First check: is premium under 90 rupees and has the strike gone out of the money? If no, hold and recheck on the next tick. If yes, second check: has it been at least 60 seconds since the last roll and are there fewer than 15 rolls today? If no, skip and hold. If yes, buy to close the current CE locking in profit, immediately sell a fresh at-the-money CE, then log the roll and send a Telegram alert, before returning to monitoring the new CE on the next tick.">
+          <defs>
+            <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+            </marker>
+            <marker id="arrow2-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" class="accent-text" />
+            </marker>
+          </defs>
+
+          <!-- node1 -->
+          <rect x="20" y="150" width="190" height="80" rx="4" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="115" y="184" text-anchor="middle" font-size="13" font-weight="500">New CE tick</text>
+          <text x="115" y="202" text-anchor="middle" font-size="11" fill="var(--ink-soft)">premium, spot</text>
+
+          <!-- diamond 1 -->
+          <polygon points="345,110 460,190 345,270 230,190" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="345" y="180" text-anchor="middle" font-size="12" font-weight="500">premium &lt; ₹90</text>
+          <text x="345" y="196" text-anchor="middle" font-size="12" font-weight="500">and strike now OTM?</text>
+
+          <!-- diamond 2 -->
+          <polygon points="670,110 800,190 670,270 540,190" class="node-fill node-stroke" stroke-width="1.4"/>
+          <text x="670" y="176" text-anchor="middle" font-size="11.5" font-weight="500">≥60s since last roll</text>
+          <text x="670" y="192" text-anchor="middle" font-size="11.5" font-weight="500">and &lt;15 rolls today?</text>
+
+          <!-- hold box -->
+          <rect x="330" y="330" width="410" height="60" rx="4" class="node-fill node-stroke" stroke-width="1.3"/>
+          <text x="535" y="356" text-anchor="middle" font-size="12.5" font-weight="500">Hold current CE</text>
+          <text x="535" y="373" text-anchor="middle" font-size="11" fill="var(--ink-soft)">recheck on next tick</text>
+
+          <!-- action nodes -->
+          <rect x="850" y="115" width="200" height="76" rx="4" class="accent-node" stroke-width="1.6"/>
+          <text x="950" y="147" text-anchor="middle" font-size="12.5" font-weight="600">BUY to close</text>
+          <text x="950" y="165" text-anchor="middle" font-size="11">lock in the ₹ P&amp;L</text>
+
+          <rect x="1090" y="115" width="180" height="76" rx="4" class="accent-node" stroke-width="1.6"/>
+          <text x="1180" y="147" text-anchor="middle" font-size="12.5" font-weight="600">SELL fresh ATM</text>
+          <text x="1180" y="165" text-anchor="middle" font-size="11">re-enter immediately</text>
+
+          <rect x="990" y="250" width="230" height="60" rx="4" class="node-fill node-stroke" stroke-width="1.3"/>
+          <text x="1105" y="276" text-anchor="middle" font-size="12" font-weight="500">Log roll + notify</text>
+          <text x="1105" y="293" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">state.py, Telegram</text>
+
+          <!-- node1 -> diamond1 -->
+          <line x1="210" y1="190" x2="228" y2="190" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow2)"/>
+
+          <!-- diamond1 No -> hold -->
+          <path d="M345,270 V330" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow2)"/>
+          <text x="358" y="305" font-size="11" class="arrow-label">no</text>
+
+          <!-- diamond1 Yes -> diamond2 -->
+          <line x1="460" y1="190" x2="538" y2="190" class="arrow-line" stroke-width="1.3" marker-end="url(#arrow2)"/>
+          <text x="499" y="182" text-anchor="middle" font-size="11" class="arrow-label">yes</text>
+
+          <!-- diamond2 No -> hold -->
+          <path d="M670,270 V300 H535 V330" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow2)"/>
+          <text x="683" y="292" font-size="11" class="arrow-label">no</text>
+
+          <!-- diamond2 Yes -> buy-to-close -->
+          <path d="M800,190 H830 V153 H850" class="arrow-accent" stroke-width="1.8" fill="none" marker-end="url(#arrow2-accent)"/>
+          <text x="815" y="182" text-anchor="middle" font-size="11" class="accent-text">yes</text>
+
+          <!-- buy -> sell -->
+          <line x1="1050" y1="153" x2="1090" y2="153" class="arrow-accent" stroke-width="1.8" marker-end="url(#arrow2-accent)"/>
+
+          <!-- sell -> log -->
+          <path d="M1180,191 V230 H1105 V250" class="arrow-line" stroke-width="1.3" fill="none" marker-end="url(#arrow2)"/>
+
+          <!-- log -> back to node1 (loop) -->
+          <path d="M990,280 H115 V230" class="arrow-line" stroke-width="1.3" fill="none" stroke-dasharray="4 4" marker-end="url(#arrow2)"/>
+          <text x="560" y="422" text-anchor="middle" font-size="11" class="arrow-label">resume monitoring the new CE</text>
+
+          <!-- hold -> back to node1 (loop) -->
+          <path d="M330,360 H115 V230" class="arrow-line" stroke-width="1.3" fill="none" stroke-dasharray="4 4" marker-end="url(#arrow2)"/>
+        </svg>
+      </div>
+      <figcaption>Both "no" branches land on the same hold state — a decayed premium alone, or a fresh roll seconds ago, isn't enough on its own to trigger another switch.</figcaption>
+    </figure>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">03</span>
+      <div>
+        <h2>A trading day, start to finish</h2>
+        <p>What happens automatically, in order, with no one watching. Spacing here is sequential, not to scale — the gap between 15:15 and 15:30 is drawn the same width as the whole trading session.</p>
+      </div>
+    </div>
+    <figure>
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1220 240" role="img" aria-label="Sequential timeline: 06:00 the Kite access token expires; 08:00 auth.py logs in via TOTP for a fresh token; 09:15 NSE opens; 09:20 the bot opens the PE and CE legs if not already open, and continuous CE-roll monitoring on live ticks begins; 15:15 on an expiry day that leg is squared off; 15:20 trading_end stops new entries and rolls; 15:25 the daily loss check runs and force-squares-off if breached; 15:30 NSE closes.">
+          <line x1="60" y1="90" x2="1160" y2="90" class="arrow-line" stroke-width="1.4"/>
+
+          <!-- span bracket: continuous monitoring -->
+          <line x1="440" y1="130" x2="1010" y2="130" class="arrow-accent" stroke-width="3"/>
+          <line x1="440" y1="122" x2="440" y2="138" class="arrow-accent" stroke-width="3"/>
+          <line x1="1010" y1="122" x2="1010" y2="138" class="arrow-accent" stroke-width="3"/>
+          <text x="725" y="152" text-anchor="middle" font-size="11.5" class="accent-text" font-weight="600">continuous CE-roll monitoring on live ticks</text>
+
+          <!-- events -->
+          <g font-size="12" text-anchor="middle">
+            <!-- 1 -->
+            <circle cx="90" cy="90" r="4.5" fill="var(--ink)"/>
+            <text x="90" y="70" font-weight="600">06:00</text>
+            <text x="90" y="186" fill="var(--ink-soft)">access_token</text>
+            <text x="90" y="200" fill="var(--ink-soft)">expires</text>
+
+            <!-- 2 -->
+            <circle cx="220" cy="90" r="4.5" fill="var(--ink)"/>
+            <text x="220" y="70" font-weight="600">~08:00</text>
+            <text x="220" y="186" fill="var(--ink-soft)">auth.py TOTP</text>
+            <text x="220" y="200" fill="var(--ink-soft)">re-login</text>
+
+            <!-- 3 -->
+            <circle cx="350" cy="90" r="4.5" fill="var(--ink)"/>
+            <text x="350" y="70" font-weight="600">09:15</text>
+            <text x="350" y="186" fill="var(--ink-soft)">NSE opens</text>
+
+            <!-- 4 -->
+            <circle cx="440" cy="90" r="5" class="accent-text"/>
+            <text x="440" y="70" font-weight="600" class="accent-text">09:20</text>
+            <text x="440" y="186" fill="var(--ink-soft)">PE + CE legs</text>
+            <text x="440" y="200" fill="var(--ink-soft)">open if needed</text>
+
+            <!-- 5 -->
+            <circle cx="700" cy="90" r="4.5" fill="var(--line)" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="2 2"/>
+            <text x="700" y="70" font-weight="600">15:15</text>
+            <text x="700" y="186" fill="var(--ink-soft)">if expiry day:</text>
+            <text x="700" y="200" fill="var(--ink-soft)">square off that leg</text>
+
+            <!-- 6 -->
+            <circle cx="880" cy="90" r="4.5" fill="var(--ink)"/>
+            <text x="880" y="70" font-weight="600">15:20</text>
+            <text x="880" y="186" fill="var(--ink-soft)">trading_end —</text>
+            <text x="880" y="200" fill="var(--ink-soft)">no new rolls</text>
+
+            <!-- 7 -->
+            <circle cx="1010" cy="90" r="4.5" fill="var(--ink)"/>
+            <text x="1010" y="70" font-weight="600">15:25</text>
+            <text x="1010" y="186" fill="var(--ink-soft)">daily loss check</text>
+            <text x="1010" y="200" fill="var(--ink-soft)">+ forced squareoff</text>
+
+            <!-- 8 -->
+            <circle cx="1130" cy="90" r="4.5" fill="var(--ink)"/>
+            <text x="1130" y="70" font-weight="600">15:30</text>
+            <text x="1130" y="186" fill="var(--ink-soft)">NSE closes</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>The dashed marker at 15:15 fires only on an actual expiry day for that leg — every other weekday it's a no-op.</figcaption>
+    </figure>
+  </section>
+
+  <div class="takeaway">
+    <p><strong>Why this matters before picking infra:</strong> the amber path in diagram 1 and the continuous monitoring band in diagram 3 are exactly what changes shape depending on hosting.</p>
+    <p>On a home device or a VPS, <code>kite_websocket</code> holds a live connection and <code>check_ce_roll()</code> fires the instant a tick crosses the threshold. On GitHub Actions, there's no persistent connection to hold — that box gets replaced by a scheduled poll of <code>kite.quote()</code> every ~5 minutes, and the accent band in diagram 3 becomes a series of dots instead of a continuous line.</p>
+  </div>
+</main>
