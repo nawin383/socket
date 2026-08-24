@@ -38,7 +38,7 @@ ce_leg:
   expiry_type: weekly
   target_premium: 120       # entry: pick the ATM CE whose live premium is closest to this
   premium_tolerance: 15
-  strike_search_range: 10
+  strike_search_range: 2    # only 2 strikes from ATM (ATM ±2 = 5 candidates max, matches instruments.py:131 ATM cap)
   quantity_lots: 1
   product: NRML
   exit_premium_threshold: 90   # exit + roll once premium drops below this
