@@ -23,7 +23,15 @@ pe_leg:
   stop_loss:
     enabled: true
     trigger_pct: 40          # exit if premium rises this % above entry (caps loss at ~40% of credit
-                              # received); does NOT re-enter PE for the rest of that day
+                              # received)
+  reentry_after_stop_loss:
+    enabled: true
+    discount_points: 20      # after a stop-loss, rest a SELL LIMIT at (SL trigger price - this) on
+                              # the same strike — only fills if premium actually comes back down
+    order_valid_until: "15:20"  # cancel the resting re-entry order if still unfilled by this time (IST)
+                                 # If it fills: this second attempt has its OWN stop at the ORIGINAL
+                                 # SL trigger price, capping its max loss at exactly discount_points —
+                                 # NOT a repeat of trigger_pct. No third attempt either way.
 
 ce_leg:
   enabled: true

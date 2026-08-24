@@ -2,7 +2,9 @@
 Nifty option-selling strategy:
 
 - PE leg: short one ITM PE on the monthly expiry, entered near a target
-  premium. Held; squared off automatically on its expiry day.
+  premium. Held; squared off automatically on its expiry day. Has a
+  percentage stop-loss, with an optional single tighter re-entry attempt
+  afterward — see check_pe_stop_loss() and check_pending_pe_reentry().
 - CE leg: short one ATM CE on the weekly expiry, entered near a target
   premium. Continuously rolled: whenever its premium decays below a
   threshold AND the strike has drifted OTM relative to spot, it is bought
@@ -164,18 +166,28 @@ class NiftyOptionSellerStrategy:
     def check_pe_stop_loss(self, pe_ltp: float):
         """
         Call on every fresh PE quote: since the PE is short, its premium
-        rising above entry is a loss. Exit if it rises `trigger_pct`% above
-        entry. Does NOT re-enter that day — ensure_pe_leg() checks
-        stop_loss_fired_today() and stays flat, since immediately re-selling
-        into a market that just blew through the stop tends to compound the
-        loss rather than cap it.
+        rising above entry is a loss.
+
+        The ORIGINAL leg (sl_reference_price is NULL) uses the configured
+        percentage stop: exit if premium rises trigger_pct% above entry.
+        If pe_leg.reentry_after_stop_loss is enabled, this exit places a
+        resting SELL LIMIT re-entry at (trigger_price - discount_points) —
+        see _place_pe_reentry().
+
+        A RE-ENTERED leg (sl_reference_price set — see
+        check_pending_pe_reentry()) uses a flat-price stop at that same
+        original trigger_price instead of a fresh percentage calc, so its
+        max loss is capped at exactly discount_points — and never attempts
+        a second re-entry, to bound this to one retry per day.
         """
         leg = self.state.get_leg("PE")
         sl_cfg = self.pe_cfg.get("stop_loss", {})
         if not leg or not sl_cfg.get("enabled", False):
             return
 
-        trigger_price = leg["entry_price"] * (1 + sl_cfg["trigger_pct"] / 100.0)
+        is_reentry_leg = leg["sl_reference_price"] is not None
+        trigger_price = (leg["sl_reference_price"] if is_reentry_leg
+                          else round(leg["entry_price"] * (1 + sl_cfg["trigger_pct"] / 100.0), 2))
         if pe_ltp < trigger_price:
             return
 
@@ -183,14 +195,76 @@ class NiftyOptionSellerStrategy:
                                          pe_ltp, self.pe_cfg["product"])
         pnl = (leg["entry_price"] - fill) * leg["quantity"]
         today = datetime.now().date().isoformat()
-        self.state.log_roll("PE", "STOP_LOSS", leg["tradingsymbol"], fill, leg["quantity"], note=f"pnl={pnl:.2f}")
+        label = "STOP_LOSS_REENTRY" if is_reentry_leg else "STOP_LOSS"
+        self.state.log_roll("PE", label, leg["tradingsymbol"], fill, leg["quantity"], note=f"pnl={pnl:.2f}")
         self.state.add_realized_pnl(pnl)
         self.state.record_stop_loss("PE", today, leg["entry_price"], fill)
         self.state.clear_leg("PE")
-        self.notifier.send(
-            f"PE leg STOP-LOSS hit: BUY {leg['tradingsymbol']} x{leg['quantity']} @ {fill:.2f} "
-            f"(pnl {pnl:.2f}). Not re-entering PE for the rest of today."
+
+        reentry_cfg = self.pe_cfg.get("reentry_after_stop_loss", {})
+        if not is_reentry_leg and reentry_cfg.get("enabled", False):
+            self._place_pe_reentry(leg, trigger_price, reentry_cfg)
+            self.notifier.send(
+                f"PE leg STOP-LOSS hit: BUY {leg['tradingsymbol']} x{leg['quantity']} @ {fill:.2f} "
+                f"(pnl {pnl:.2f}). Placed a tighter re-entry limit order — see next message if it fills."
+            )
+        else:
+            self.notifier.send(
+                f"PE leg STOP-LOSS hit: BUY {leg['tradingsymbol']} x{leg['quantity']} @ {fill:.2f} "
+                f"(pnl {pnl:.2f}). Not re-entering PE for the rest of today."
+            )
+
+    def _place_pe_reentry(self, closed_leg, trigger_price: float, reentry_cfg: dict):
+        discount = reentry_cfg.get("discount_points", 20)
+        limit_price = trigger_price - discount
+        order_id = self.orders.place_resting_limit_sell(
+            closed_leg["tradingsymbol"], closed_leg["exchange"], closed_leg["quantity"],
+            limit_price, self.pe_cfg["product"],
         )
+        self.state.set_pending_order(
+            "PE", order_id, closed_leg["tradingsymbol"], closed_leg["instrument_token"],
+            closed_leg["exchange"], closed_leg["strike"], closed_leg["quantity"],
+            limit_price, trigger_price, reentry_cfg.get("order_valid_until", "15:20"),
+        )
+
+    def check_pending_pe_reentry(self, pe_ltp: float, now: datetime):
+        """
+        Call whenever a PE re-entry limit order might be resting (i.e.
+        state.get_pending_order("PE") could return something). Converts it
+        into a real, tracked PE leg the moment it fills; cancels it and
+        stays flat for the day if it's still unfilled past
+        reentry_after_stop_loss.order_valid_until.
+        """
+        pending = self.state.get_pending_order("PE")
+        if not pending:
+            return
+
+        fill_price = self.orders.check_order_filled(pending["order_id"])
+        if fill_price is None and self.orders.mode == "paper" and pe_ltp <= pending["limit_price"]:
+            fill_price = pending["limit_price"]
+
+        if fill_price is not None:
+            self.state.set_leg(
+                "PE", pending["tradingsymbol"], pending["instrument_token"], pending["exchange"],
+                pending["strike"], "PE", pending["quantity"], fill_price,
+                sl_reference_price=pending["sl_reference_price"],
+            )
+            self.state.clear_pending_order("PE")
+            max_loss = (pending["sl_reference_price"] - fill_price) * pending["quantity"]
+            self.notifier.send(
+                f"PE re-entry filled: SELL {pending['tradingsymbol']} x{pending['quantity']} @ {fill_price:.2f} "
+                f"— tighter stop at {pending['sl_reference_price']:.2f} (max further loss ~{max_loss:.0f})"
+            )
+            return
+
+        h, m = pending["valid_until"].split(":")
+        cutoff = now.time().replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+        if now.time() >= cutoff:
+            self.orders.cancel_order(pending["order_id"])
+            self.state.clear_pending_order("PE")
+            self.notifier.send(
+                f"PE re-entry order expired unfilled at {pending['limit_price']:.2f} — staying flat today."
+            )
 
     def square_off_leg_if_near_expiry(self, leg_name: str, cfg: dict, now: datetime):
         leg = self.state.get_leg(leg_name)

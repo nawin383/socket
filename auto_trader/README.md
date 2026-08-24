@@ -50,6 +50,16 @@ on your own machine, via either of two deployment paths:
 Both entry premiums, thresholds, quantities, and moneyness are config
 values (`config/config.yaml`), not hardcoded — tune them there.
 
+- **PE stop-loss + one tighter re-entry**: if held PE premium rises 40%
+  above entry, exit and rest a SELL LIMIT re-entry 20 points cheaper on the
+  same strike; if that fills, its own stop is a flat price (not a fresh
+  40%), capping the second attempt's max loss at exactly that 20-point
+  discount — with no third attempt either way. See
+  [`docs/pe_stop_loss_reentry.md`](docs/pe_stop_loss_reentry.md) for the
+  config reference and the honest tradeoff (helps whipsaws, costs a bit
+  extra on real trends), and the architecture diagram artifact for the
+  full flowchart.
+
 ## Project layout
 
 ```
