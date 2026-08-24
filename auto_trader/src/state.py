@@ -108,8 +108,14 @@ class StateStore:
             conn.commit()
 
     def today_state(self) -> sqlite3.Row:
+        """Read-only when today's row already exists, so polling this on every
+        run (as the GitHub Actions poller does) doesn't churn the on-disk file
+        and create a noisy commit when nothing actually changed."""
         today = datetime.now().date().isoformat()
         with closing(self._connect()) as conn:
-            conn.execute("INSERT OR IGNORE INTO daily_state (trading_day) VALUES (?)", (today,))
-            conn.commit()
-            return conn.execute("SELECT * FROM daily_state WHERE trading_day = ?", (today,)).fetchone()
+            row = conn.execute("SELECT * FROM daily_state WHERE trading_day = ?", (today,)).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO daily_state (trading_day) VALUES (?)", (today,))
+                conn.commit()
+                row = conn.execute("SELECT * FROM daily_state WHERE trading_day = ?", (today,)).fetchone()
+            return row

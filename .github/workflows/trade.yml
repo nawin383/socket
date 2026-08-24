@@ -1,0 +1,87 @@
+name: Kite Auto Trader
+
+# Runs one poll cycle of auto_trader/src/poll_once.py on a schedule during
+# (and slightly around) NSE trading hours. IST = UTC+5:30, so 09:15-15:30
+# IST is 03:45-10:00 UTC; the window below pads that for the pre-market
+# login and end-of-day housekeeping.
+#
+# GitHub's schedule trigger is best-effort and can lag several minutes
+# under load — this is not a substitute for the Telegram alerts and the
+# optional dead-man's-switch ping below for knowing the bot is alive.
+on:
+  schedule:
+    - cron: "*/5 2-10 * * 1-5"
+  workflow_dispatch: {}
+
+concurrency:
+  group: kite-auto-trader
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: auto_trader/requirements.txt
+
+      - name: Compute today's cache key
+        id: datekey
+        run: echo "today=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      # One cache entry per trading day: the first run each day misses,
+      # logs in fresh, and saves it; every later run that day gets an exact
+      # hit and skips re-saving (GitHub cache keys are immutable). auth.py
+      # also checks the embedded date itself, so a stale restore-keys
+      # fallback (e.g. the very first run of a new day) is harmless.
+      - name: Restore today's cached access token
+        uses: actions/cache@v4
+        with:
+          path: auto_trader/data/access_token.json
+          key: kite-access-token-${{ steps.datekey.outputs.today }}
+          restore-keys: |
+            kite-access-token-
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install -r auto_trader/requirements.txt
+
+      - name: Run one poll cycle
+        working-directory: auto_trader
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
+          KITE_PASSWORD: ${{ secrets.KITE_PASSWORD }}
+          KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m src.poll_once
+
+      - name: Dead-man's-switch ping (optional)
+        if: always() && vars.HEALTHCHECKS_PING_URL != ''
+        continue-on-error: true
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            curl -fsS -m 10 "${{ vars.HEALTHCHECKS_PING_URL }}"
+          else
+            curl -fsS -m 10 "${{ vars.HEALTHCHECKS_PING_URL }}/fail"
+          fi
+
+      - name: Commit updated trading state
+        if: always()
+        run: |
+          git config user.name "kite-auto-trader-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add auto_trader/data/state.db
+          git diff --cached --quiet || git commit -m "state: automated update [skip ci]"
+          git push

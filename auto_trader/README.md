@@ -2,8 +2,17 @@
 
 Fully automated Nifty option-selling bot built on top of this repo's
 `kite_websocket` client (for live monitoring) plus the official
-`kiteconnect` SDK (for auth/orders). Designed to run unattended on a
-server 24/7 instead of on your own machine — see `deploy/DEPLOY.md`.
+`kiteconnect` SDK (for auth/orders). Designed to run unattended instead of
+on your own machine, via either of two deployment paths:
+
+- **`deploy/DEPLOY.md`** — an always-on VPS running `src/main.py`, with a
+  live tick feed and sub-second roll reaction time. Needs a server and a
+  terminal.
+- **`deploy/GITHUB_ACTIONS.md`** — no server at all: GitHub runs
+  `src/poll_once.py` on a schedule (~every 5 min) during market hours.
+  Everything is configured through a browser (repo Settings, the web file
+  editor, the Actions tab) — no terminal required. Roll reactions lag by
+  up to one polling interval instead of being instant.
 
 ## ⚠️ Read this first
 
@@ -56,11 +65,12 @@ auto_trader/
 │   ├── order_manager.py  marketable-limit-then-market order execution (or paper simulation)
 │   ├── strategy.py       the PE/CE entry + CE-rolling logic described above
 │   ├── notifier.py       Telegram alerts
-│   ├── ticker_feed.py    live LTPs via this repo's kite_websocket.KiteWebSocket
-│   ├── health.py         HTTP healthcheck endpoint for uptime monitoring
-│   └── main.py           wires it all together, runs the loop
-├── deploy/                Docker + systemd + step-by-step VPS deployment guide
-├── scripts/               stop_trading.sh / resume_trading.sh (kill switch)
+│   ├── ticker_feed.py    live LTPs via this repo's kite_websocket.KiteWebSocket (VPS path only)
+│   ├── health.py         HTTP healthcheck endpoint for uptime monitoring (VPS path only)
+│   ├── main.py           always-on entrypoint: wires it all together, runs the loop (VPS path)
+│   └── poll_once.py      single-shot entrypoint for the GitHub Actions schedule
+├── deploy/                Docker + systemd VPS guide, and the GitHub Actions guide
+├── scripts/               stop_trading.sh / resume_trading.sh (kill switch, VPS path)
 └── tests/                 unit tests for the pure decision logic
 ```
 
@@ -84,15 +94,17 @@ python -m src.main                     # runs the bot (mode: paper by default)
 1. Confirm a full day of clean `paper` mode behavior (check Telegram/logs
    for the strikes it picked and any roll events).
 2. Set `mode: live` in `config/config.yaml`.
-3. Deploy per `deploy/DEPLOY.md` so it survives your machine going offline.
+3. Deploy per `deploy/DEPLOY.md` (VPS) or `deploy/GITHUB_ACTIONS.md`
+   (no server/terminal needed) so it survives your machine going offline.
 4. Keep `quantity_lots: 1` until you trust it; scale up deliberately.
 
 ## Kill switch
 
-```bash
-./scripts/stop_trading.sh    # pause new entries/rolls; open positions untouched
-./scripts/resume_trading.sh  # resume
-```
+VPS path: `./scripts/stop_trading.sh` / `./scripts/resume_trading.sh`
+(pause/resume new entries/rolls; open positions untouched either way).
+
+GitHub Actions path: create/delete an empty file at
+`auto_trader/data/STOP_TRADING` via GitHub's web file editor.
 
 If `risk.max_daily_loss` is breached, the bot squares off both legs and
 halts new entries for the rest of that day automatically.
