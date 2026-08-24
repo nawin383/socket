@@ -52,6 +52,19 @@ def main():
     kite = KiteConnect(api_key=settings.api_key)
     kite.set_access_token(token)
 
+    try:
+        _run(kite, config, mode, notifier)
+    except Exception as e:
+        # Login failures are reported above with their own message; anything
+        # past that point (order errors, bad API responses, instrument
+        # lookups, ...) previously just died silently in the Actions log
+        # with no Telegram alert at all. Catch-all so a crash is never quiet.
+        logger.exception("Poll run crashed")
+        notifier.send(f"Poll run crashed: {e}")
+        raise
+
+
+def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
     # Not persisted across runs (each run is a fresh container) — only
     # cached for the lifetime of this one process.
     store = InstrumentStore(kite, Path(tempfile.gettempdir()))
