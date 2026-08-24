@@ -6,6 +6,7 @@ for real-time market data streaming.
 """
 
 from .client import KiteWebSocket
+from .server import KiteWebSocketServer
 from .exceptions import (
     KiteWebSocketException,
     KiteConnectionError,
@@ -18,6 +19,7 @@ from . import utils
 __version__ = "1.0.0"
 __all__ = [
     "KiteWebSocket",
+    "KiteWebSocketServer",
     "KiteWebSocketException",
     "KiteConnectionError",
     "KiteAuthenticationError",

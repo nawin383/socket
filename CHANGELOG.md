@@ -53,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `KiteWebSocketServer`: a relay server that shares a single upstream Kite
+  WebSocket connection across multiple local downstream clients
+- `examples/server_example.py` demonstrating the relay server
+- Unit tests for the relay server
+
 ### Planned Features
 - Historical data support
 - More subscription management utilities

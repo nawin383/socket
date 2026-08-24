@@ -120,12 +120,48 @@ def on_connect(ws, response):
     ws.set_mode(ws.MODE_FULL, instruments)
 ```
 
+## Relay Server
+
+Kite typically limits the number of concurrent WebSocket connections per
+access token. `KiteWebSocketServer` maintains a single upstream connection
+and relays ticks to any number of local downstream clients over plain
+WebSocket connections, so multiple consumers can share one Kite connection.
+
+```python
+from kite_websocket import KiteWebSocketServer
+
+server = KiteWebSocketServer(
+    api_key="your_api_key",
+    access_token="your_access_token",
+    host="localhost",
+    port=8765,
+)
+server.start()
+```
+
+Downstream clients speak the same JSON protocol as Kite itself:
+
+```json
+{"a": "subscribe", "v": [256265, 408065]}
+{"a": "mode", "v": ["full", [256265, 408065]]}
+```
+
+and receive broadcasted messages:
+
+```json
+{"type": "ticks", "data": [...]}
+{"type": "connect", "data": null}
+{"type": "close", "data": {"code": 1000, "reason": ""}}
+{"type": "error", "data": {"code": null, "reason": "..."}}
+```
+
 ## Examples
 
 Check the `examples/` directory for more examples:
 - `basic_example.py` - Simple connection and subscription
 - `advanced_example.py` - Advanced features with error handling
 - `multi_mode_example.py` - Multiple subscription modes
+- `server_example.py` - Relay server shared by multiple downstream clients
 
 ## Configuration
 

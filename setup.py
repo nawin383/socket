@@ -33,6 +33,7 @@ setup(
         "twisted>=22.10.0",
         "autobahn>=23.1.0",
         "pytz>=2023.3",
+        "websockets>=11.0",
     ],
     keywords="kite zerodha websocket trading stocks",
 )

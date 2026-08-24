@@ -1,0 +1,17 @@
+[Unit]
+Description=Kite Auto Trader (bare-metal / non-Docker deployment)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kite-trader/auto_trader
+ExecStart=/opt/kite-trader/venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/kite-trader/auto_trader/.env
+StandardOutput=append:/var/log/kite-trader.log
+StandardError=append:/var/log/kite-trader.log
+
+[Install]
+WantedBy=multi-user.target

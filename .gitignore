@@ -137,3 +137,13 @@ Thumbs.db
 config.ini
 credentials.json
 *.log
+
+# auto_trader runtime state (secrets, token cache) — ignored for the VPS
+# deployment, which keeps this local. The GitHub Actions poller instead
+# commits state.db back to the repo as its cross-run persistence, and the
+# kill switch there is "does this file exist in the repo", so both are
+# deliberately un-ignored below.
+auto_trader/data/*
+!auto_trader/data/state.db
+!auto_trader/data/STOP_TRADING
+auto_trader/**/.env
