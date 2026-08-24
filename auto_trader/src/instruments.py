@@ -45,10 +45,17 @@ class InstrumentStore:
         dates = {d.date() if hasattr(d, "date") else d for d in opts["expiry"]}
         return sorted(dates)
 
-    def weekly_expiry(self, name: str, today: date) -> date:
-        upcoming = [e for e in self.expiries(name) if e >= today]
+    def weekly_expiry(self, name: str, today: date, min_days_out: int = 0) -> date:
+        """
+        Nearest upcoming weekly expiry. `min_days_out` excludes expiries
+        closer than that many days away — e.g. min_days_out=1 skips an
+        expiry falling on `today` itself (0DTE), landing on next week's
+        contract instead, which carries lower margin/gamma risk than
+        holding or entering a same-day-expiry option.
+        """
+        upcoming = [e for e in self.expiries(name) if (e - today).days >= min_days_out]
         if not upcoming:
-            raise RuntimeError(f"No upcoming expiries found for {name}")
+            raise RuntimeError(f"No upcoming expiries found for {name} at least {min_days_out} day(s) out")
         return upcoming[0]
 
     def monthly_expiry(self, name: str, today: date) -> date:

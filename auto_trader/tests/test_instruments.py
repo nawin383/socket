@@ -40,6 +40,18 @@ class TestExpirySelection(unittest.TestCase):
         store = self._store_with_expiries([date(2026, 1, 1), date(2026, 1, 8), date(2026, 1, 15)])
         self.assertEqual(store.weekly_expiry("NIFTY", date(2026, 1, 2)), date(2026, 1, 8))
 
+    def test_weekly_expiry_includes_today_by_default(self):
+        store = self._store_with_expiries([date(2026, 1, 8), date(2026, 1, 15)])
+        self.assertEqual(store.weekly_expiry("NIFTY", date(2026, 1, 8)), date(2026, 1, 8))
+
+    def test_weekly_expiry_skips_today_with_min_days_out(self):
+        # 0DTE avoidance: today IS an expiry day, so with min_days_out=1 we should
+        # land on next week's contract instead of the one expiring today.
+        store = self._store_with_expiries([date(2026, 1, 8), date(2026, 1, 15)])
+        self.assertEqual(
+            store.weekly_expiry("NIFTY", date(2026, 1, 8), min_days_out=1), date(2026, 1, 15)
+        )
+
     def test_monthly_expiry_is_last_expiry_of_the_month(self):
         store = self._store_with_expiries(
             [date(2026, 1, 8), date(2026, 1, 15), date(2026, 1, 22), date(2026, 1, 29), date(2026, 2, 5)]

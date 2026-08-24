@@ -66,16 +66,19 @@ def main():
     strategy.reconcile_from_broker()
 
     spot_token = config["underlying"]["spot_instrument_token"]
-    latest = {"spot": None, "ce_ltp": None}
+    latest = {"spot": None, "ce_ltp": None, "pe_ltp": None}
 
     def on_ticks(ticks):
         for tick in ticks:
             token = tick["instrument_token"]
             if token == spot_token:
                 latest["spot"] = tick["last_price"]
-            leg = state.get_leg("CE")
-            if leg and token == leg["instrument_token"]:
+            ce_leg = state.get_leg("CE")
+            if ce_leg and token == ce_leg["instrument_token"]:
                 latest["ce_ltp"] = tick["last_price"]
+            pe_leg = state.get_leg("PE")
+            if pe_leg and token == pe_leg["instrument_token"]:
+                latest["pe_ltp"] = tick["last_price"]
 
     feed = TickerFeed(settings.api_key, kite.access_token, on_ticks)
     feed.start()
@@ -120,11 +123,19 @@ def main():
             if risk.trading_allowed(now):
                 strategy.ensure_pe_leg()
                 strategy.ensure_ce_leg()
-                leg = state.get_leg("CE")
-                if leg:
-                    feed.set_tokens([spot_token, leg["instrument_token"]])
-                    if latest["spot"] and latest["ce_ltp"]:
-                        strategy.check_ce_roll(latest["ce_ltp"], latest["spot"])
+                ce_leg = state.get_leg("CE")
+                pe_leg = state.get_leg("PE")
+                tokens = [spot_token]
+                if ce_leg:
+                    tokens.append(ce_leg["instrument_token"])
+                if pe_leg:
+                    tokens.append(pe_leg["instrument_token"])
+                feed.set_tokens(tokens)
+
+                if ce_leg and latest["spot"] and latest["ce_ltp"]:
+                    strategy.check_ce_roll(latest["ce_ltp"], latest["spot"])
+                if pe_leg and latest["pe_ltp"]:
+                    strategy.check_pe_stop_loss(latest["pe_ltp"])
 
             time.sleep(poll_cfg.get("reconcile_interval_sec", 15))
 
