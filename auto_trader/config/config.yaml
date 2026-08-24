@@ -20,6 +20,10 @@ pe_leg:
   close_before_expiry:
     enabled: true
     time: "15:15"           # square off on expiry day at/after this time (IST)
+  stop_loss:
+    enabled: true
+    trigger_pct: 40          # exit if premium rises this % above entry (caps loss at ~40% of credit
+                              # received); does NOT re-enter PE for the rest of that day
 
 ce_leg:
   enabled: true
@@ -32,6 +36,8 @@ ce_leg:
   exit_premium_threshold: 90   # exit + roll once premium drops below this
   exit_requires_otm: true      # AND the strike must have drifted OTM vs spot
   reentry_moneyness: ATM       # re-enter at the fresh ATM strike after a roll
+  avoid_zero_dte_entry: true   # if a fresh/rolled entry would land on an expiring-today (0DTE)
+                                # contract, use next week's expiry instead (lower margin/gamma risk)
   min_seconds_between_rolls: 60
   max_rolls_per_day: 15
   close_before_expiry:

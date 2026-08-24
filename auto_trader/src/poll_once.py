@@ -87,14 +87,24 @@ def main():
     strategy.ensure_pe_leg()
     strategy.ensure_ce_leg()
 
-    leg = state.get_leg("CE")
-    if leg:
+    ce_leg = state.get_leg("CE")
+    pe_leg = state.get_leg("PE")
+    if ce_leg or pe_leg:
         spot_symbol = config["underlying"]["spot_symbol"]
-        ce_key = f"{leg['exchange']}:{leg['tradingsymbol']}"
-        quotes = kite.ltp([spot_symbol, ce_key])
-        spot = quotes[spot_symbol]["last_price"]
-        ce_ltp = quotes[ce_key]["last_price"]
-        strategy.check_ce_roll(ce_ltp, spot)
+        keys = [spot_symbol]
+        if ce_leg:
+            keys.append(f"{ce_leg['exchange']}:{ce_leg['tradingsymbol']}")
+        if pe_leg:
+            keys.append(f"{pe_leg['exchange']}:{pe_leg['tradingsymbol']}")
+        quotes = kite.ltp(keys)
+
+        if ce_leg:
+            spot = quotes[spot_symbol]["last_price"]
+            ce_ltp = quotes[f"{ce_leg['exchange']}:{ce_leg['tradingsymbol']}"]["last_price"]
+            strategy.check_ce_roll(ce_ltp, spot)
+        if pe_leg:
+            pe_ltp = quotes[f"{pe_leg['exchange']}:{pe_leg['tradingsymbol']}"]["last_price"]
+            strategy.check_pe_stop_loss(pe_ltp)
 
 
 if __name__ == "__main__":

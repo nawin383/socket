@@ -79,6 +79,9 @@ class NiftyOptionSellerStrategy:
     def ensure_pe_leg(self):
         if not self.pe_cfg.get("enabled", True) or self.state.get_leg("PE"):
             return
+        if self.state.stop_loss_fired_today("PE"):
+            logger.info("PE stop-loss already fired today — not re-entering")
+            return
 
         spot = self.get_spot()
         expiry = self.store.monthly_expiry(self.underlying_cfg["name"], date.today())
@@ -102,7 +105,8 @@ class NiftyOptionSellerStrategy:
 
     def _open_ce_leg(self):
         spot = self.get_spot()
-        expiry = self.store.weekly_expiry(self.underlying_cfg["name"], date.today())
+        min_days_out = 1 if self.ce_cfg.get("avoid_zero_dte_entry", True) else 0
+        expiry = self.store.weekly_expiry(self.underlying_cfg["name"], date.today(), min_days_out=min_days_out)
         info = find_strike_by_target_premium(
             self.kite, self.store, self.underlying_cfg["name"], expiry, "CE", spot,
             self.underlying_cfg["strike_step"], self.ce_cfg["target_premium"],
@@ -156,6 +160,37 @@ class NiftyOptionSellerStrategy:
         )
 
         self._open_ce_leg()
+
+    def check_pe_stop_loss(self, pe_ltp: float):
+        """
+        Call on every fresh PE quote: since the PE is short, its premium
+        rising above entry is a loss. Exit if it rises `trigger_pct`% above
+        entry. Does NOT re-enter that day — ensure_pe_leg() checks
+        stop_loss_fired_today() and stays flat, since immediately re-selling
+        into a market that just blew through the stop tends to compound the
+        loss rather than cap it.
+        """
+        leg = self.state.get_leg("PE")
+        sl_cfg = self.pe_cfg.get("stop_loss", {})
+        if not leg or not sl_cfg.get("enabled", False):
+            return
+
+        trigger_price = leg["entry_price"] * (1 + sl_cfg["trigger_pct"] / 100.0)
+        if pe_ltp < trigger_price:
+            return
+
+        fill = self.orders.buy_to_close(leg["tradingsymbol"], leg["exchange"], leg["quantity"],
+                                         pe_ltp, self.pe_cfg["product"])
+        pnl = (leg["entry_price"] - fill) * leg["quantity"]
+        today = datetime.now().date().isoformat()
+        self.state.log_roll("PE", "STOP_LOSS", leg["tradingsymbol"], fill, leg["quantity"], note=f"pnl={pnl:.2f}")
+        self.state.add_realized_pnl(pnl)
+        self.state.record_stop_loss("PE", today, leg["entry_price"], fill)
+        self.state.clear_leg("PE")
+        self.notifier.send(
+            f"PE leg STOP-LOSS hit: BUY {leg['tradingsymbol']} x{leg['quantity']} @ {fill:.2f} "
+            f"(pnl {pnl:.2f}). Not re-entering PE for the rest of today."
+        )
 
     def square_off_leg_if_near_expiry(self, leg_name: str, cfg: dict, now: datetime):
         leg = self.state.get_leg(leg_name)
