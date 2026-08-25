@@ -26,7 +26,7 @@ pe_leg:
                               # received); does NOT re-enter PE for the rest of that day
 
   take_profit:
-    enabled: true
+    enabled: false
     # Smart profit booking for PE (you have SL control only — this gives you profit control):
     # Trigger when premium drops this % below entry (e.g., 15% profit → 700 → 595)
     # This is "lesser than entry price" logic. Set 0 to disable % check and use points only.
