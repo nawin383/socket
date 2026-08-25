@@ -312,5 +312,80 @@ class TestPeReentryAfterStopLoss(unittest.TestCase):
         self.assertIsNone(self.state.get_leg("PE"))
 
 
+class TestReconcileFromBroker(unittest.TestCase):
+    """
+    Regression coverage for the adopt/square-off resurrection loop: in paper
+    mode, square_off_leg_if_near_expiry()/square_off_all() clear the leg from
+    state but never send a real closing order, so a broker-adopted real
+    position stays genuinely open. Without the squared_off_today() guard,
+    the next reconcile_from_broker() call would see that still-open position,
+    re-adopt it as brand new, and fire an "Adopted existing..." Telegram
+    message plus re-trigger the same square-off — once per poll cycle,
+    forever, as actually happened in production (46 duplicate events and a
+    fabricated Rs 4,00,000+ realized PnL in a single afternoon).
+    """
+
+    BROKER_POSITION = {
+        "exchange": "NFO", "tradingsymbol": "NIFTY2690124200CE",
+        "quantity": -195, "average_price": 163.63, "instrument_token": 999,
+    }
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.state = StateStore(Path(self.tmpdir.name) / "state.db")
+        self.notifier = MagicMock()
+        self.kite = MagicMock()
+        self.kite.positions.return_value = {"net": [self.BROKER_POSITION]}
+        store = MagicMock()
+        store.strike_for_tradingsymbol.return_value = 24200.0
+        self.strategy = NiftyOptionSellerStrategy(
+            kite=self.kite, store=store, orders=MagicMock(),
+            state=self.state, risk=MagicMock(), notifier=self.notifier, config=CONFIG,
+        )
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_adopts_a_real_position_not_yet_in_state(self):
+        self.strategy.reconcile_from_broker()
+
+        leg = self.state.get_leg("CE")
+        self.assertIsNotNone(leg)
+        self.assertEqual(leg["tradingsymbol"], "NIFTY2690124200CE")
+        self.notifier.send.assert_called_once()
+        self.assertIn("Adopted existing broker position", self.notifier.send.call_args[0][0])
+
+    def test_does_not_readopt_after_being_squared_off_today(self):
+        today = datetime.now().date().isoformat()
+        self.state.record_squareoff("CE", today, "expiry")
+
+        self.strategy.reconcile_from_broker()
+
+        self.assertIsNone(self.state.get_leg("CE"))
+        self.notifier.send.assert_not_called()
+
+    def test_does_not_readopt_after_pe_stop_loss_today(self):
+        pe_position = {**self.BROKER_POSITION, "tradingsymbol": "NIFTY26SEP25000PE", "average_price": 700.0}
+        self.kite.positions.return_value = {"net": [pe_position]}
+        today = datetime.now().date().isoformat()
+        self.state.record_stop_loss("PE", today, entry_price=700.0, exit_price=980.0)
+
+        self.strategy.reconcile_from_broker()
+
+        self.assertIsNone(self.state.get_leg("PE"))
+        self.notifier.send.assert_not_called()
+
+    def test_readopts_normally_the_next_day(self):
+        """The flag is scoped to trading_day, not permanent — a still-open
+        real position should be picked back up on a later day."""
+        yesterday = "2020-01-01"
+        self.state.record_squareoff("CE", yesterday, "expiry")
+
+        self.strategy.reconcile_from_broker()
+
+        self.assertIsNotNone(self.state.get_leg("CE"))
+        self.notifier.send.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
