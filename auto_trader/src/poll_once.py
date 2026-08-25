@@ -22,7 +22,7 @@ from . import auth
 from .instruments import InstrumentStore
 from .notifier import Notifier
 from .order_manager import OrderManager
-from .risk import RiskGuard
+from .risk import IST, RiskGuard
 from .settings import BASE_DIR, load_settings
 from .state import StateStore
 from .strategy import NiftyOptionSellerStrategy
@@ -78,7 +78,10 @@ def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
 
     strategy.reconcile_from_broker()
 
-    now = datetime.now()
+    # GitHub Actions runners default to UTC; trading_start/end in config.yaml
+    # are IST, so `now` must carry IST tzinfo or every hours check is wrong
+    # by 5.5 hours (see risk.IST).
+    now = datetime.now(IST)
 
     if not risk.is_trading_day(now):
         logger.info("Not a trading day, exiting")
@@ -138,11 +141,11 @@ def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
         if pe_leg:
             pe_ltp = quotes[f"{pe_leg['exchange']}:{pe_leg['tradingsymbol']}"]["last_price"]
             strategy.check_pe_stop_loss(pe_ltp)
-            # Smart PE profit: premium < entry or overall profit
-            try:
-                strategy.check_pe_take_profit(pe_ltp, ce_ltp=ce_ltp)
-            except Exception as e:
-                logger.error("PE take-profit check failed: %s", e)
+            # Smart PE profit: premium < entry or overall profit. Not
+            # locally caught — a bug here should reach the outer crash
+            # handler in main() (and thus Telegram), not just a log line
+            # nobody's watching.
+            strategy.check_pe_take_profit(pe_ltp, ce_ltp=ce_ltp)
         if pe_pending:
             pe_pending_ltp = quotes[f"{pe_pending['exchange']}:{pe_pending['tradingsymbol']}"]["last_price"]
             strategy.check_pending_pe_reentry(pe_pending_ltp, now)

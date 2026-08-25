@@ -3,8 +3,16 @@
 import logging
 from datetime import datetime, time as dtime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+# All trading_start/trading_end/eod_square_off_time config values are IST
+# wall-clock times (NSE's timezone). Callers must pass an `now` built with
+# this tzinfo (datetime.now(IST)) — GitHub Actions runners and most VPS
+# hosts default to UTC, and a naive datetime.now() compared against these
+# IST times silently checks the wrong 5.5-hour window instead of raising.
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def _parse_time(value: str) -> dtime:

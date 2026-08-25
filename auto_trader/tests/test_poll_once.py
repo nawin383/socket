@@ -10,6 +10,7 @@ no other test currently exercises main() at all.
 import unittest
 from unittest.mock import MagicMock, patch
 
+from src.risk import IST
 from src.settings import Settings
 from src import poll_once
 
@@ -73,6 +74,46 @@ class TestPollOnceMainWiring(unittest.TestCase):
 
         sent = " ".join(str(call.args[0]) for call in notifier.send.call_args_list)
         self.assertIn("Login FAILED this run", sent)
+
+
+class TestPollOnceUsesIST(unittest.TestCase):
+    """
+    Regression test: GitHub Actions runners default to UTC, but
+    trading_start/trading_end in config.yaml are IST wall-clock times.
+    _run() must build `now` with IST tzinfo (via risk.IST) before handing
+    it to RiskGuard — a naive datetime.now() silently checks the wrong
+    5.5-hour window instead of erroring, which is exactly what happened in
+    production (a 10:29 IST run logged "Trading not allowed").
+    """
+
+    @patch("src.poll_once.NiftyOptionSellerStrategy")
+    @patch("src.poll_once.OrderManager")
+    @patch("src.poll_once.RiskGuard")
+    @patch("src.poll_once.StateStore")
+    @patch("src.poll_once.InstrumentStore")
+    def test_run_passes_ist_aware_now_to_risk_guard(
+        self, _store_cls, _state_cls, risk_cls, _orders_cls, _strategy_cls
+    ):
+        risk = risk_cls.return_value
+        risk.is_trading_day.return_value = True
+        risk.is_eod_square_off_time.return_value = False
+        risk.daily_loss_breached.return_value = False
+        risk.trading_allowed.return_value = False
+
+        strategy = _strategy_cls.return_value
+        strategy._get_overall_pnl_today.side_effect = RuntimeError("no quotes yet")
+
+        config = {
+            "underlying": {"spot_symbol": "NSE:NIFTY 50"},
+            "risk": {"kill_switch_file": "STOP_TRADING"},
+            "orders": {},
+        }
+
+        poll_once._run(MagicMock(), config, "paper", MagicMock())
+
+        risk.is_trading_day.assert_called_once()
+        now_arg = risk.is_trading_day.call_args[0][0]
+        self.assertEqual(now_arg.tzinfo, IST)
 
 
 if __name__ == "__main__":
