@@ -29,6 +29,8 @@ from typing import Dict, Any, Optional
 import requests
 import yaml
 
+from .table_format import render_table, short_symbol
+
 logger = logging.getLogger(__name__)
 
 
@@ -97,6 +99,8 @@ class TelegramBot:
             "flatten": self._cmd_stop,  # alias: squareoff ALL + pause
             "reconcile": self._cmd_reconcile,
             "reset_pnl": self._cmd_reset_pnl,
+            "weekly": self._cmd_weekly,
+            "monthly": self._cmd_monthly,
             # Mode/Qty
             "mode": self._cmd_mode,
             "qty": self._cmd_qty,
@@ -321,39 +325,10 @@ class TelegramBot:
             return str(v)
 
     def _short_symbol(self, tradingsymbol: str) -> str:
-        """
-        Strip the redundant underlying-name prefix for table cells — e.g.
-        "NIFTY26SEP25000PE" -> "26SEP25000PE". Every symbol in this
-        single-underlying bot shares the same prefix, so it adds width
-        without adding information; on a phone-width code block that's the
-        difference between fitting on screen and needing to scroll.
-        """
-        name = self.config["underlying"]["name"]
-        return tradingsymbol[len(name):] if tradingsymbol.startswith(name) else tradingsymbol
+        return short_symbol(tradingsymbol, self.config["underlying"]["name"])
 
     def _table(self, headers, rows):
-        """
-        Render headers/rows as a fixed-width table inside a ``` code block.
-
-        Telegram only renders monospace inside code spans/blocks — plain text
-        with manual space-padding (the previous approach) does NOT line up on
-        the actual client, it renders in a proportional font. A code block
-        also sidesteps Markdown parsing entirely, so tradingsymbols, negative
-        PnL signs, etc. can never break message delivery here.
-        """
-        headers = [str(h) for h in headers]
-        str_rows = [[str(c) for c in row] for row in rows]
-        widths = [len(h) for h in headers]
-        for row in str_rows:
-            for i, cell in enumerate(row):
-                widths[i] = max(widths[i], len(cell))
-
-        def fmt_row(cells):
-            return "  ".join(c.ljust(w) for c, w in zip(cells, widths))
-
-        lines = [fmt_row(headers), "  ".join("-" * w for w in widths)]
-        lines.extend(fmt_row(r) for r in str_rows)
-        return "```\n" + "\n".join(lines) + "\n```"
+        return render_table(headers, rows)
 
     # ---------- MONITOR commands ----------
     def _cmd_status(self, args, chat_id, raw_msg):
@@ -797,6 +772,18 @@ class TelegramBot:
         self.notifier.send(f"Today's realized PnL/roll count reset to 0 by Telegram ({chat_id})")
         return "✅ Today's realized PnL and roll count reset to 0."
 
+    def _cmd_weekly(self, args, chat_id, raw_msg):
+        try:
+            return self.strategy.pnl_history_summary(7, "Weekly")
+        except Exception as e:
+            return f"⚠️ /weekly failed: `{e}`"
+
+    def _cmd_monthly(self, args, chat_id, raw_msg):
+        try:
+            return self.strategy.pnl_history_summary(30, "Monthly")
+        except Exception as e:
+            return f"⚠️ /monthly failed: `{e}`"
+
     # ---------- MODE / QTY ----------
     def _cmd_mode(self, args, chat_id, raw_msg):
         cur = self.orders.mode if hasattr(self.orders, "mode") else self.config.get("mode", "paper")
@@ -1035,6 +1022,7 @@ class TelegramBot:
             "`/squareoff PE|CE|ALL` — close one/both (qty = actual position qty)\n"
             "`/reconcile` — re-adopt broker shorts\n"
             "`/reset_pnl confirm` — zero today's realized PnL/roll count (fixing a bug, not routine use)\n"
+            "`/weekly` — last 7 trading days' PnL  `/monthly` — last 30\n"
             "\n*Mode & Qty (qty = real lot from Zerodha, roll preserves qty):*\n"
             "`/mode` / `/mode paper` / `/mode live confirm`\n"
             "`/qty` `/qty 2` (both) `/qty pe 1` `/qty ce 2` — next entry lots; roll uses same qty as closed leg\n"

@@ -50,6 +50,7 @@ def _make_bot(tmpdir):
     strategy = MagicMock()
     strategy._get_overall_pnl_today.return_value = (0.0, 0.0, 0.0)
     strategy._quote_ltp.return_value = 100.0
+    strategy.pnl_history_summary.return_value = "*mocked pnl history*"
     orders = MagicMock()
     orders.mode = "paper"
     risk = MagicMock()
@@ -104,7 +105,8 @@ class TestCommandsSmoke(unittest.TestCase):
     with no open legs (flat) and with both legs open."""
 
     def _run_all(self, bot):
-        for cmd in ("ping", "status", "positions", "legs", "pnl", "config", "risk", "overall", "history"):
+        for cmd in ("ping", "status", "positions", "legs", "pnl", "config", "risk", "overall", "history",
+                    "weekly", "monthly"):
             with self.subTest(cmd=cmd):
                 reply = bot.handlers[cmd]([], "123", {})
                 self.assertIsInstance(reply, str)
@@ -121,6 +123,16 @@ class TestCommandsSmoke(unittest.TestCase):
             state.set_leg("PE", "NIFTY26SEP25000PE", 111, "NFO", 25000, "PE", 75, 700.0)
             state.set_leg("CE", "NIFTY26O0724200CE", 222, "NFO", 24200, "CE", 75, 120.0)
             self._run_all(bot)
+
+    def test_weekly_and_monthly_pass_correct_window_to_strategy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot, _ = _make_bot(tmp)
+
+            bot._cmd_weekly([], "123", {})
+            bot.strategy.pnl_history_summary.assert_called_with(7, "Weekly")
+
+            bot._cmd_monthly([], "123", {})
+            bot.strategy.pnl_history_summary.assert_called_with(30, "Monthly")
 
     def test_ping_has_no_dependencies(self):
         """/ping must work even if state/kite/strategy would blow up —

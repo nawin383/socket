@@ -90,6 +90,7 @@ def _run(kite: KiteConnect, config: dict, mode: str, notifier: Notifier):
     if risk.is_eod_square_off_time(now):
         strategy.square_off_leg_if_near_expiry("PE", strategy.pe_cfg, now)
         strategy.square_off_leg_if_near_expiry("CE", strategy.ce_cfg, now)
+        strategy.send_eod_summary_if_due(now)
 
     # Total loss (realized + unrealized) — answers "today's loss or entire loss" (entire, including open)
     try:

@@ -70,6 +70,11 @@ CREATE TABLE IF NOT EXISTS squareoff_events (
     PRIMARY KEY (leg, trading_day)
 );
 
+CREATE TABLE IF NOT EXISTS eod_summary_events (
+    trading_day TEXT PRIMARY KEY,
+    time TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS pending_orders (
     leg TEXT PRIMARY KEY,
     order_id TEXT NOT NULL,
@@ -251,6 +256,31 @@ class StateStore:
                 "SELECT 1 FROM squareoff_events WHERE leg = ? AND trading_day = ?", (leg, today)
             ).fetchone()
             return row is not None
+
+    def mark_eod_summary_sent(self, trading_day: str):
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO eod_summary_events (trading_day, time) VALUES (?, ?)",
+                (trading_day, datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def eod_summary_sent_today(self) -> bool:
+        today = datetime.now().date().isoformat()
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM eod_summary_events WHERE trading_day = ?", (today,)
+            ).fetchone()
+            return row is not None
+
+    def daily_pnl_history(self, days: int):
+        """Most recent `days` daily_state rows (including today, if it
+        exists), oldest first — the raw data behind /weekly and /monthly."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT * FROM daily_state ORDER BY trading_day DESC LIMIT ?", (days,)
+            ).fetchall()
+            return list(reversed(rows))
 
     def set_pending_order(self, leg: str, order_id: str, tradingsymbol: str, instrument_token: int,
                            exchange: str, strike: float, quantity: int, limit_price: float,
