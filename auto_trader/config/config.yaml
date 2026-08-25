@@ -1,7 +1,7 @@
 # Kite auto-trader configuration.
 # Secrets (API keys, passwords, TOTP secret) live in .env, not here.
 
-mode: paper   # "paper" (simulate fills, no real orders) or "live" (real money). Start in paper.
+mode: live   # "paper" (simulate fills, no real orders) or "live" (real money). Start in paper.
 
 underlying:
   name: NIFTY
