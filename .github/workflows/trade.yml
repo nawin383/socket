@@ -2,15 +2,17 @@ name: Kite Auto Trader
 
 # Runs one poll cycle of auto_trader/src/poll_once.py on a schedule during
 # (and slightly around) NSE trading hours. IST = UTC+5:30, so 09:15-15:30
-# IST is 03:45-10:00 UTC; the window below pads that for the pre-market
-# login and end-of-day housekeeping.
+# IST is 03:45-10:00 UTC. The window below (2-9 UTC = 07:30-15:55 IST) pads
+# the start for pre-market login and stops at the EOD square-off time
+# (risk.eod_square_off_time: 15:25 IST) plus a small buffer — no runs after
+# ~4 PM IST, on request.
 #
 # GitHub's schedule trigger is best-effort and can lag several minutes
 # under load — this is not a substitute for the Telegram alerts and the
 # optional dead-man's-switch ping below for knowing the bot is alive.
 on:
   schedule:
-    - cron: "*/5 2-10 * * 1-5"
+    - cron: "*/5 2-9 * * 1-5"
   workflow_dispatch: {}
 
 concurrency:
