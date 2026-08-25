@@ -96,6 +96,7 @@ class TelegramBot:
             "squareoff": self._cmd_squareoff,
             "flatten": self._cmd_stop,  # alias: squareoff ALL + pause
             "reconcile": self._cmd_reconcile,
+            "reset_pnl": self._cmd_reset_pnl,
             # Mode/Qty
             "mode": self._cmd_mode,
             "qty": self._cmd_qty,
@@ -775,6 +776,27 @@ class TelegramBot:
         except Exception as e:
             return f"⚠️ /reconcile failed: {e}"
 
+    def _cmd_reset_pnl(self, args, chat_id, raw_msg):
+        """
+        Zero out today's realized_pnl/roll_count in daily_state — for
+        correcting a ledger polluted by a bug (e.g. the reconcile/square-off
+        duplicate-event loop), not for routine use. roll_history is left
+        untouched as the audit trail; this only clears the running total.
+        Gated behind `confirm` since it rewrites the day's PnL figure the
+        max-daily-loss check relies on.
+        """
+        if not args or args[0].lower() != "confirm":
+            today = self.state.today_state()
+            return (
+                f"Today's ledger: realized `Rs {today['realized_pnl']:.2f}`, rolls `{today['roll_count']}`.\n"
+                "This zeroes both — only use it to correct a figure you know is wrong "
+                "(a bug, not a real trading day). roll_history is untouched.\n"
+                "Confirm with: `/reset_pnl confirm`"
+            )
+        self.state.reset_today_pnl()
+        self.notifier.send(f"Today's realized PnL/roll count reset to 0 by Telegram ({chat_id})")
+        return "✅ Today's realized PnL and roll count reset to 0."
+
     # ---------- MODE / QTY ----------
     def _cmd_mode(self, args, chat_id, raw_msg):
         cur = self.orders.mode if hasattr(self.orders, "mode") else self.config.get("mode", "paper")
@@ -1012,6 +1034,7 @@ class TelegramBot:
             "`/stop`/`/flatten` — 🛑 square ALL + pause\n"
             "`/squareoff PE|CE|ALL` — close one/both (qty = actual position qty)\n"
             "`/reconcile` — re-adopt broker shorts\n"
+            "`/reset_pnl confirm` — zero today's realized PnL/roll count (fixing a bug, not routine use)\n"
             "\n*Mode & Qty (qty = real lot from Zerodha, roll preserves qty):*\n"
             "`/mode` / `/mode paper` / `/mode live confirm`\n"
             "`/qty` `/qty 2` (both) `/qty pe 1` `/qty ce 2` — next entry lots; roll uses same qty as closed leg\n"
