@@ -1,7 +1,7 @@
 # Kite auto-trader configuration.
 # Secrets (API keys, passwords, TOTP secret) live in .env, not here.
 
-mode: live   # "paper" (simulate fills, no real orders) or "live" (real money). Start in paper.
+mode: paper   # "paper" (simulate fills, no real orders) or "live" (real money). Start in paper.
 
 underlying:
   name: NIFTY
@@ -75,7 +75,7 @@ orders:
   fallback_to_market: true        # ...cancel and send a MARKET order instead
 
 risk:
-  max_daily_loss: 15000           # realized P&L floor (INR); breach -> square off + halt for the day
+  max_daily_loss: 10000           # realized P&L floor (INR); breach -> square off + halt for the day
   kill_switch_file: "STOP_TRADING"  # touch data/STOP_TRADING to pause new entries/rolls instantly
   trading_start: "09:20"
   trading_end: "15:20"
