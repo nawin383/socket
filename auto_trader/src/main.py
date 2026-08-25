@@ -16,7 +16,7 @@ from .health import heartbeat, start_health_server
 from .instruments import InstrumentStore
 from .notifier import Notifier
 from .order_manager import OrderManager
-from .risk import RiskGuard
+from .risk import IST, RiskGuard
 from .settings import BASE_DIR, load_settings
 from .state import StateStore
 from .strategy import NiftyOptionSellerStrategy
@@ -109,11 +109,13 @@ def main():
 
     notifier.send(f"Bot started in {mode.upper()} mode. Kill switch: touch {kill_switch_path} to pause.")
     poll_cfg = config.get("polling", {})
-    last_token_refresh_day = datetime.now().date()
+    # GitHub Actions/most VPS hosts default to UTC; trading_start/end in
+    # config.yaml are IST, so `now` must carry IST tzinfo (see risk.IST).
+    last_token_refresh_day = datetime.now(IST).date()
 
     try:
         while True:
-            now = datetime.now()
+            now = datetime.now(IST)
             heartbeat(status)
 
             if now.date() != last_token_refresh_day and now.hour >= poll_cfg.get("token_refresh_check_hour", 8):
@@ -188,11 +190,10 @@ def main():
                     strategy.check_ce_roll(latest["ce_ltp"], latest["spot"])
                 if pe_leg and latest["pe_ltp"]:
                     strategy.check_pe_stop_loss(latest["pe_ltp"])
-                    # Smart PE profit booking — you asked for premium<entry or overall profit
-                    try:
-                        strategy.check_pe_take_profit(latest["pe_ltp"], ce_ltp=latest.get("ce_ltp"))
-                    except Exception as e:
-                        logger.error("PE take-profit check failed: %s", e)
+                    # Smart PE profit booking. Not locally caught — a bug
+                    # here should reach the outer crash handler (and thus
+                    # Telegram), not just a log line nobody's watching.
+                    strategy.check_pe_take_profit(latest["pe_ltp"], ce_ltp=latest.get("ce_ltp"))
                 if pe_pending and latest["pe_pending_ltp"]:
                     strategy.check_pending_pe_reentry(latest["pe_pending_ltp"], now)
 
