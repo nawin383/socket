@@ -151,6 +151,36 @@ python -m src.backtest pe 700 75 40 pe_history.csv --reentry 20
 python -m src.backtest ce 90 ce_history.csv
 ```
 
+## Web dashboard (free, always-on, no server)
+
+`docs/index.html` is a static, single-file dashboard: legs, today's PnL,
+recent events, and a 7-day trend, read live from `data/state.db` in the
+repo — no VPS, no cost, hosted for free by GitHub Pages. A settings panel
+lets you change the same fields the Telegram `/set_*` commands expose
+(target premiums, stop-loss %, exit threshold, quantities, max daily loss,
+mode) from a form instead of typing commands; saving commits straight to
+`config/config.yaml`, edited surgically so every comment in the file is
+preserved (not a full YAML parse+re-dump, which would silently wipe them —
+worth knowing since that's what the Telegram bot's own `_save_config()`
+does today).
+
+**One-time setup:**
+1. Repo **Settings → Pages** → Source: *Deploy from a branch* → branch:
+   this repo's default branch, folder: `/docs` → Save. GitHub gives you a
+   URL like `https://nawin383.github.io/socket/` within a minute or two —
+   bookmark it, that's your dashboard from any browser, no login needed to
+   just *view* it (the repo is public).
+2. To *change* settings from the dashboard (not required just to watch
+   it): create a fine-grained token at
+   `github.com/settings/personal-access-tokens/new` — Repository access:
+   only this repo; Permissions → Contents: **Read and write**. Paste it
+   into the dashboard's Settings panel once; it's stored only in that
+   browser's local storage and sent only to `api.github.com`.
+
+Refresh is roughly 30 seconds client-side, plus whatever GitHub's own raw-
+content CDN caches on top of that — this is a monitoring/tuning dashboard,
+not a tick-by-tick terminal.
+
 ## Known limitations / possible next steps
 
 - Single account, single underlying (NIFTY), two legs exactly as

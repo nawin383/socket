@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kite Auto Trader — Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+<style>
+  :root {
+    --bg: #f7f7f8; --panel: #ffffff; --border: #e2e2e6; --text: #1c1c1f;
+    --muted: #6b6b74; --accent: #3d5afe; --good: #1f9d55; --bad: #d64545;
+    --warn: #b8860b; --code-bg: #f0f0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --panel: #1e1e23; --border: #2e2e35; --text: #e8e8ec;
+      --muted: #9a9aa5; --accent: #7b93ff; --good: #4ade80; --bad: #f87171;
+      --warn: #fbbf24; --code-bg: #131316;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 16px; max-width: 900px; margin-inline: auto;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 16px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .panel h2 { font-size: 0.95rem; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .stat { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .stat .label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .stat .value { font-size: 1.05rem; font-weight: 600; margin-top: 2px; word-break: break-word; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
+  .pill.good { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); }
+  .pill.bad { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); }
+  .pill.warn { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; }
+  .table-wrap { overflow-x: auto; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  label { font-size: 0.8rem; color: var(--muted); display: block; margin-bottom: 3px; }
+  input[type="number"], input[type="text"], input[type="password"], select {
+    background: var(--code-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 8px; font-size: 0.85rem; width: 100%;
+  }
+  .field { flex: 1 1 130px; min-width: 110px; }
+  button {
+    background: var(--accent); color: white; border: none; border-radius: 7px;
+    padding: 8px 14px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+  }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #status-msg { font-size: 0.82rem; margin-top: 8px; min-height: 1.2em; }
+  #status-msg.err { color: var(--bad); }
+  #status-msg.ok { color: var(--good); }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0 0 12px; padding: 10px 12px; }
+  legend { font-size: 0.8rem; font-weight: 600; padding: 0 6px; color: var(--muted); }
+  .confirm-row { display: flex; align-items: center; gap: 6px; margin: 10px 0; font-size: 0.82rem; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>🤖 Kite Auto Trader</h1>
+<div class="sub" id="last-updated">Loading…</div>
+
+<div class="panel" id="overview-panel">
+  <h2>Overview</h2>
+  <div class="grid" id="overview-grid"><span class="muted">Loading…</span></div>
+</div>
+
+<div class="panel" id="legs-panel">
+  <h2>Legs</h2>
+  <div class="table-wrap"><table id="legs-table"><thead></thead><tbody></tbody></table></div>
+</div>
+
+<div class="panel" id="history-panel">
+  <h2>Recent events</h2>
+  <div class="table-wrap"><table id="history-table"><thead></thead><tbody></tbody></table></div>
+</div>
+
+<div class="panel" id="daily-panel">
+  <h2>Last 7 trading days</h2>
+  <div class="table-wrap"><table id="daily-table"><thead></thead><tbody></tbody></table></div>
+</div>
+
+<div class="panel" id="settings-panel">
+  <h2>⚙️ Settings <span class="muted" style="font-weight:400;font-size:0.75rem;">— same fields as the Telegram /set_* commands</span></h2>
+
+  <fieldset>
+    <legend>PE leg</legend>
+    <div class="row">
+      <div class="field"><label>Target premium</label><input type="number" id="pe_target" /></div>
+      <div class="field"><label>Stop-loss %</label><input type="number" id="pe_sl" /></div>
+      <div class="field"><label>Qty (lots)</label><input type="number" id="pe_qty" min="1" max="10" /></div>
+      <div class="field"><label>Take-profit</label>
+        <select id="pe_tp"><option value="true">Enabled</option><option value="false">Disabled</option></select>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>CE leg</legend>
+    <div class="row">
+      <div class="field"><label>Target premium</label><input type="number" id="ce_target" /></div>
+      <div class="field"><label>Exit threshold</label><input type="number" id="ce_exit" /></div>
+      <div class="field"><label>Qty (lots)</label><input type="number" id="ce_qty" min="1" max="10" /></div>
+      <div class="field"><label>Max rolls/day</label><input type="number" id="ce_maxrolls" /></div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Risk</legend>
+    <div class="row">
+      <div class="field"><label>Max daily loss (₹)</label><input type="number" id="max_loss" /></div>
+      <div class="field"><label>Mode</label>
+        <select id="mode"><option value="paper">Paper</option><option value="live">Live</option></select>
+      </div>
+    </div>
+    <div class="confirm-row" id="live-confirm-row" style="display:none;">
+      <input type="checkbox" id="live-confirm" />
+      <label for="live-confirm" style="margin:0;">I understand switching to LIVE places real orders</label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>GitHub token (to save changes)</legend>
+    <div class="row">
+      <div class="field" style="flex:3;">
+        <label>Fine-grained PAT, Contents: Read and write, scoped to this repo only</label>
+        <input type="password" id="gh-token" placeholder="github_pat_..." />
+      </div>
+      <div class="field" style="flex:0 0 auto;">
+        <label>&nbsp;</label>
+        <button type="button" class="secondary" id="forget-token-btn">Forget token</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:0.75rem;margin-top:4px;">
+      Stored only in this browser's local storage. Never sent anywhere except
+      api.github.com. See the repo README for how to create one.
+    </div>
+  </fieldset>
+
+  <div class="row">
+    <button type="button" id="save-btn">Save settings</button>
+    <button type="button" class="secondary" id="refresh-btn">Refresh now</button>
+  </div>
+  <div id="status-msg"></div>
+</div>
+
+<script>
+const OWNER = "nawin383";
+const REPO = "socket";
+const BRANCH = "claude/kite-websocket-impl-011CUY3sWNYJ4SZkLsrH2g9d";
+const RAW_BASE = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}`;
+const API_BASE = `https://api.github.com/repos/${OWNER}/${REPO}/contents`;
+const REFRESH_MS = 30000;
+
+let SQL = null;
+let currentConfigText = null;
+let currentConfigParsed = null;
+
+function fmt(n, digits = 2) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  return Number(n).toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+function shortSymbol(sym, underlying) {
+  return sym && sym.startsWith(underlying) ? sym.slice(underlying.length) : sym;
+}
+function setStatus(msg, kind) {
+  const el = document.getElementById("status-msg");
+  el.textContent = msg;
+  el.className = kind || "";
+}
+
+async function fetchText(path) {
+  const resp = await fetch(`${RAW_BASE}/${path}?_=${Date.now()}`);
+  if (!resp.ok) throw new Error(`${path}: HTTP ${resp.status}`);
+  return resp.text();
+}
+async function fetchBuffer(path) {
+  const resp = await fetch(`${RAW_BASE}/${path}?_=${Date.now()}`);
+  if (!resp.ok) throw new Error(`${path}: HTTP ${resp.status}`);
+  return resp.arrayBuffer();
+}
+async function fileExists(path) {
+  const resp = await fetch(`${RAW_BASE}/${path}?_=${Date.now()}`, { method: "HEAD" });
+  return resp.ok;
+}
+
+function renderTable(tableId, headers, rows) {
+  const table = document.getElementById(tableId);
+  table.querySelector("thead").innerHTML = "<tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr>";
+  const tbody = table.querySelector("tbody");
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="${headers.length}" class="muted">No data</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => "<tr>" + r.map(c => `<td>${c}</td>`).join("") + "</tr>").join("");
+}
+
+function q(db, sql, params = []) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  const rows = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return rows;
+}
+
+async function loadDashboard() {
+  try {
+    if (!SQL) SQL = await initSqlJs({ locateFile: f => `https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/${f}` });
+
+    const [configText, dbBuffer, killSwitchOn] = await Promise.all([
+      fetchText("auto_trader/config/config.yaml"),
+      fetchBuffer("auto_trader/data/state.db"),
+      fileExists("auto_trader/data/STOP_TRADING"),
+    ]);
+    currentConfigText = configText;
+    currentConfigParsed = jsyaml.load(configText);
+    const cfg = currentConfigParsed;
+    const db = new SQL.Database(new Uint8Array(dbBuffer));
+    const underlying = cfg.underlying.name;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const dailyRows = q(db, "SELECT * FROM daily_state WHERE trading_day = ?", [today]);
+    const todayRow = dailyRows[0] || { realized_pnl: 0, roll_count: 0, last_roll_time: null };
+    const legs = q(db, "SELECT * FROM legs");
+
+    // --- Overview ---
+    const overview = document.getElementById("overview-grid");
+    overview.innerHTML = "";
+    const stats = [
+      ["Mode", cfg.mode, cfg.mode === "live" ? "bad" : "good"],
+      ["Kill switch", killSwitchOn ? "ON" : "OFF", killSwitchOn ? "bad" : "good"],
+      ["Realized today", `₹${fmt(todayRow.realized_pnl)}`, todayRow.realized_pnl < 0 ? "bad" : "good"],
+      ["Events today", todayRow.roll_count, null],
+      ["Last event", todayRow.last_roll_time ? todayRow.last_roll_time.slice(11, 16) : "—", null],
+    ];
+    for (const [label, value, pillKind] of stats) {
+      const div = document.createElement("div");
+      div.className = "stat";
+      div.innerHTML = `<div class="label">${label}</div><div class="value">` +
+        (pillKind ? `<span class="pill ${pillKind}">${value}</span>` : value) + `</div>`;
+      overview.appendChild(div);
+    }
+
+    // --- Legs ---
+    const legRows = [];
+    for (const legName of ["PE", "CE"]) {
+      const leg = legs.find(l => l.leg === legName);
+      const cfgKey = legName === "PE" ? "pe_leg" : "ce_leg";
+      const on = cfg[cfgKey].enabled ? "ON" : "OFF";
+      if (leg) {
+        legRows.push([legName, on, shortSymbol(leg.tradingsymbol, underlying), leg.quantity,
+                       fmt(leg.entry_price), (leg.entry_time || "").slice(0, 16)]);
+      } else {
+        legRows.push([legName, on, "<span class='muted'>flat</span>", "-", "-", "-"]);
+      }
+    }
+    renderTable("legs-table", ["Leg", "State", "Symbol", "Qty", "Entry", "Since"], legRows);
+
+    // --- History ---
+    const events = q(db, "SELECT * FROM roll_history ORDER BY id DESC LIMIT 15");
+    renderTable("history-table", ["Time", "Leg", "Action", "Symbol", "Price", "Qty"],
+      events.map(e => [e.time.slice(0, 16).replace("T", " "), e.leg, e.action,
+                        shortSymbol(e.tradingsymbol, underlying), fmt(e.price), e.quantity]));
+
+    // --- Daily history ---
+    const daily = q(db, "SELECT * FROM daily_state ORDER BY trading_day DESC LIMIT 7");
+    renderTable("daily-table", ["Day", "Realized", "Events"],
+      daily.map(d => [d.trading_day, `₹${fmt(d.realized_pnl)}`, d.roll_count]));
+
+    // --- Settings form (only fill in on first load, not every refresh, so it
+    // doesn't clobber an in-progress edit) ---
+    if (!document.getElementById("pe_target").dataset.touched) {
+      document.getElementById("pe_target").value = cfg.pe_leg.target_premium;
+      document.getElementById("pe_sl").value = cfg.pe_leg.stop_loss.trigger_pct;
+      document.getElementById("pe_qty").value = cfg.pe_leg.quantity_lots;
+      document.getElementById("pe_tp").value = String(!!(cfg.pe_leg.take_profit && cfg.pe_leg.take_profit.enabled));
+      document.getElementById("ce_target").value = cfg.ce_leg.target_premium;
+      document.getElementById("ce_exit").value = cfg.ce_leg.exit_premium_threshold;
+      document.getElementById("ce_qty").value = cfg.ce_leg.quantity_lots;
+      document.getElementById("ce_maxrolls").value = cfg.ce_leg.max_rolls_per_day;
+      document.getElementById("max_loss").value = cfg.risk.max_daily_loss;
+      document.getElementById("mode").value = cfg.mode;
+    }
+
+    document.getElementById("last-updated").textContent =
+      "Live from GitHub · updated " + new Date().toLocaleTimeString() + " · refreshes every 30s";
+    db.close();
+  } catch (e) {
+    document.getElementById("last-updated").textContent = "⚠️ Failed to load: " + e.message;
+    console.error(e);
+  }
+}
+
+// Mark fields "touched" once the user edits them, so auto-refresh doesn't
+// overwrite an in-progress change underneath them.
+for (const id of ["pe_target", "pe_sl", "pe_qty", "pe_tp", "ce_target", "ce_exit", "ce_qty",
+                   "ce_maxrolls", "max_loss", "mode"]) {
+  document.getElementById(id).addEventListener("input", e => { e.target.dataset.touched = "1"; });
+  document.getElementById(id).addEventListener("change", e => { e.target.dataset.touched = "1"; });
+}
+
+document.getElementById("mode").addEventListener("change", e => {
+  document.getElementById("live-confirm-row").style.display = e.target.value === "live" ? "flex" : "none";
+});
+
+// --- Token storage ---
+const TOKEN_KEY = "kite_dashboard_gh_token";
+const savedToken = localStorage.getItem(TOKEN_KEY);
+if (savedToken) document.getElementById("gh-token").value = savedToken;
+document.getElementById("gh-token").addEventListener("change", e => {
+  if (e.target.value) localStorage.setItem(TOKEN_KEY, e.target.value);
+});
+document.getElementById("forget-token-btn").addEventListener("click", () => {
+  localStorage.removeItem(TOKEN_KEY);
+  document.getElementById("gh-token").value = "";
+  setStatus("Token forgotten from this browser.", "ok");
+});
+
+// --- Targeted line-level YAML editing (preserves every comment/formatting
+// byte elsewhere in the file — unlike a parse+re-dump round trip) ---
+function findBlock(text, keyPath) {
+  let searchStart = 0, blockEnd = text.length, indent = 0;
+  for (const key of keyPath) {
+    const slice = text.slice(searchStart, blockEnd);
+    const lines = slice.split("\n");
+    let pos = searchStart, found = null;
+    for (const line of lines) {
+      const m = line.match(/^(\s*)([A-Za-z0-9_]+):/);
+      if (m && m[1].length === indent && m[2] === key) {
+        found = { lineStart: pos, indent: m[1].length, headerEnd: pos + line.length };
+        break;
+      }
+      pos += line.length + 1;
+    }
+    if (!found) throw new Error("Section not found in config.yaml: " + keyPath.join("."));
+    let end = blockEnd, scan = found.headerEnd + 1;
+    while (scan < blockEnd) {
+      const nl = text.indexOf("\n", scan);
+      const lineEnd = nl === -1 ? blockEnd : nl;
+      const line = text.slice(scan, lineEnd);
+      if (line.trim() !== "") {
+        const im = line.match(/^(\s*)/);
+        if (im[1].length <= found.indent) { end = scan; break; }
+      }
+      scan = lineEnd + 1;
+    }
+    searchStart = found.headerEnd + 1;
+    blockEnd = end;
+    indent = found.indent + 2;
+  }
+  return { start: searchStart, end: blockEnd };
+}
+function replaceScalarField(text, keyPath, newValue) {
+  const fieldKey = keyPath[keyPath.length - 1];
+  const parentPath = keyPath.slice(0, -1);
+  const block = parentPath.length ? findBlock(text, parentPath) : { start: 0, end: text.length };
+  const section = text.slice(block.start, block.end);
+  const re = new RegExp("(^\\s*" + fieldKey + ":\\s*)([^\\n#]+?)(\\s*(#.*)?$)", "m");
+  if (!re.test(section)) throw new Error("Field not found in config.yaml: " + keyPath.join("."));
+  const newSection = section.replace(re, (full, pre, oldVal, tail) => pre + newValue + tail);
+  return text.slice(0, block.start) + newSection + text.slice(block.end);
+}
+
+async function ghApi(path, options = {}) {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) throw new Error("Paste a GitHub token first (see the Settings panel).");
+  const resp = await fetch(`${API_BASE}/${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      ...(options.headers || {}),
+    },
+  });
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`GitHub API ${resp.status}: ${body.slice(0, 200)}`);
+  }
+  return resp.json();
+}
+
+async function saveSettings() {
+  const saveBtn = document.getElementById("save-btn");
+  saveBtn.disabled = true;
+  setStatus("Saving…");
+  try {
+    const mode = document.getElementById("mode").value;
+    if (mode === "live" && !document.getElementById("live-confirm").checked) {
+      throw new Error("Check the LIVE confirmation box first.");
+    }
+
+    const edits = [
+      [["pe_leg", "target_premium"], document.getElementById("pe_target").value],
+      [["pe_leg", "stop_loss", "trigger_pct"], document.getElementById("pe_sl").value],
+      [["pe_leg", "quantity_lots"], document.getElementById("pe_qty").value],
+      [["pe_leg", "take_profit", "enabled"], document.getElementById("pe_tp").value],
+      [["ce_leg", "target_premium"], document.getElementById("ce_target").value],
+      [["ce_leg", "exit_premium_threshold"], document.getElementById("ce_exit").value],
+      [["ce_leg", "quantity_lots"], document.getElementById("ce_qty").value],
+      [["ce_leg", "max_rolls_per_day"], document.getElementById("ce_maxrolls").value],
+      [["risk", "max_daily_loss"], document.getElementById("max_loss").value],
+      [["mode"], mode],
+    ];
+
+    // Fetch the freshest content+sha right before writing — the bot commits
+    // roughly every minute, so racing a stale sha here is a real risk, not
+    // a theoretical one.
+    const path = "auto_trader/config/config.yaml";
+    const current = await ghApi(`${path}?ref=${BRANCH}`);
+    let text = decodeURIComponent(escape(atob(current.content.replace(/\n/g, ""))));
+
+    for (const [keyPath, value] of edits) {
+      text = replaceScalarField(text, keyPath, value);
+    }
+
+    const encoded = btoa(unescape(encodeURIComponent(text)));
+    try {
+      await ghApi(path, {
+        method: "PUT",
+        body: JSON.stringify({
+          message: "Settings updated via web dashboard",
+          content: encoded,
+          sha: current.sha,
+          branch: BRANCH,
+        }),
+      });
+    } catch (e) {
+      if (String(e.message).includes("409")) {
+        // Someone else (the bot's own commit) landed in between — refetch and retry once.
+        const retryCurrent = await ghApi(`${path}?ref=${BRANCH}`);
+        let retryText = decodeURIComponent(escape(atob(retryCurrent.content.replace(/\n/g, ""))));
+        for (const [keyPath, value] of edits) retryText = replaceScalarField(retryText, keyPath, value);
+        await ghApi(path, {
+          method: "PUT",
+          body: JSON.stringify({
+            message: "Settings updated via web dashboard",
+            content: btoa(unescape(encodeURIComponent(retryText))),
+            sha: retryCurrent.sha,
+            branch: BRANCH,
+          }),
+        });
+      } else {
+        throw e;
+      }
+    }
+
+    setStatus("✅ Saved — takes effect on the bot's next poll cycle.", "ok");
+    for (const id of ["pe_target", "pe_sl", "pe_qty", "pe_tp", "ce_target", "ce_exit", "ce_qty",
+                       "ce_maxrolls", "max_loss", "mode"]) {
+      delete document.getElementById(id).dataset.touched;
+    }
+    setTimeout(loadDashboard, 1500);
+  } catch (e) {
+    setStatus("⚠️ " + e.message, "err");
+    console.error(e);
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+document.getElementById("save-btn").addEventListener("click", saveSettings);
+document.getElementById("refresh-btn").addEventListener("click", loadDashboard);
+
+loadDashboard();
+setInterval(loadDashboard, REFRESH_MS);
+</script>
+</body>
+</html>
