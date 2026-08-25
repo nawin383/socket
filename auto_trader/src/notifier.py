@@ -13,6 +13,32 @@ class Notifier:
         self.chat_id = chat_id
         self.enabled = enabled and bool(bot_token) and bool(chat_id)
 
+    def _post(self, chat_id: str, message: str, parse_mode: str = None) -> bool:
+        """
+        POST sendMessage and verify Telegram actually accepted it.
+
+        A malformed parse_mode payload (e.g. unbalanced Markdown from an
+        interpolated exception string) gets HTTP 400 with ok:false — requests
+        doesn't raise for that, so a naive fire-and-forget silently drops the
+        message with no log and no retry. Check the response body explicitly.
+        """
+        payload = {"chat_id": chat_id, "text": message}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                data=payload,
+                timeout=10,
+            )
+        except Exception as e:
+            logger.error("Telegram send request failed: %s", e)
+            return False
+        if resp.status_code == 200:
+            return True
+        logger.warning("Telegram send rejected (%s): %s", resp.status_code, resp.text[:300])
+        return False
+
     def send(self, message: str, parse_mode: str = None, chat_id: str = None):
         """Send a notification. Keeps backward-compat with existing calls."""
         target_chat = chat_id or self.chat_id
@@ -22,38 +48,17 @@ class Notifier:
         if not target_chat:
             logger.warning("No chat_id configured — skipping Telegram send")
             return
-        try:
-            payload = {"chat_id": target_chat, "text": message}
-            if parse_mode:
-                payload["parse_mode"] = parse_mode
-            # Prefer Markdown if message contains formatting, but keep plain as fallback
-            requests.post(
-                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                data=payload,
-                timeout=10,
-            )
-        except Exception as e:
-            logger.error("Failed to send Telegram notification: %s", e)
+        if self._post(target_chat, message, parse_mode):
+            return
+        if parse_mode and self._post(target_chat, message, None):
+            logger.info("Telegram send succeeded on plain-text fallback")
+            return
+        logger.error("Telegram notification dropped after formatted + plain-text attempts")
 
     def reply(self, chat_id: str, message: str, parse_mode: str = "Markdown"):
         """Reply to a specific chat (used by TelegramBot command handler)."""
-        try:
-            payload = {"chat_id": chat_id, "text": message}
-            if parse_mode:
-                payload["parse_mode"] = parse_mode
-            requests.post(
-                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                data=payload,
-                timeout=10,
-            )
-        except Exception as e:
-            logger.error("Failed to reply to %s: %s", chat_id, e)
-            # fallback without markdown
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                    data={"chat_id": chat_id, "text": message},
-                    timeout=10,
-                )
-            except Exception:
-                pass
+        if self._post(chat_id, message, parse_mode):
+            return
+        if parse_mode and self._post(chat_id, message, None):
+            return
+        logger.error("Telegram reply to %s dropped after formatted + plain-text attempts", chat_id)

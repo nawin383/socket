@@ -5,7 +5,7 @@ Runs a background thread that long-polls Telegram getUpdates and executes comman
 Only the configured TELEGRAM_CHAT_ID is authorized; all other chats are ignored.
 
 Commands are grouped for mobile use:
-  Monitor  : /status /positions /legs /pnl /spot /quote /config /risk /health /history /help
+  Monitor  : /ping /status /positions /legs /pnl /spot /quote /config /risk /health /history /help
   Control  : /pause /resume /stop /squareoff /flatten /reconcile
   Mode/Qty : /mode /qty
   Toggles  : /enable_pe /disable_pe /enable_ce /disable_ce
@@ -85,6 +85,7 @@ class TelegramBot:
             "risk": self._cmd_risk,
             "health": self._cmd_health,
             "history": self._cmd_history,
+            "ping": self._cmd_ping,
             "help": self._cmd_help,
             "commands": self._cmd_help,
             "start": self._cmd_help,
@@ -273,27 +274,33 @@ class TelegramBot:
             logger.exception("Error handling /%s", cmd)
             self._reply(chat_id, f"⚠️ Error handling `/{cmd}`: {e}")
 
+    def _post(self, chat_id: str, text: str, parse_mode: Optional[str]) -> bool:
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                data={"chat_id": chat_id, "text": text, **({"parse_mode": parse_mode} if parse_mode else {})},
+                timeout=10,
+            )
+        except Exception as e:
+            logger.error("Telegram reply request failed: %s", e)
+            return False
+        if resp.status_code == 200:
+            return True
+        # A malformed Markdown payload (e.g. an interpolated exception with a stray
+        # `_`/`*`/backtick) gets HTTP 400 with ok:false — requests doesn't raise for
+        # that, so a fire-and-forget send silently drops the reply. Log it.
+        logger.warning("Telegram reply rejected (%s): %s", resp.status_code, resp.text[:300])
+        return False
+
     def _reply(self, chat_id: str, text: str):
         # Telegram max 4096 chars; truncate gracefully
         if len(text) > 4000:
             text = text[:4000] + "\n… (truncated)"
-        # Use Markdown where possible, fallback to plain if it fails
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-                timeout=10,
-            )
-        except Exception as e:
-            logger.error("Failed to send Telegram reply: %s", e)
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                    data={"chat_id": chat_id, "text": text},
-                    timeout=10,
-                )
-            except Exception:
-                pass
+        if self._post(chat_id, text, "Markdown"):
+            return
+        if self._post(chat_id, text, None):
+            return
+        logger.error("Telegram reply to %s dropped after formatted + plain-text attempts", chat_id)
 
     # ---------- helpers ----------
     def _save_config(self):
@@ -312,6 +319,30 @@ class TelegramBot:
         except Exception:
             return str(v)
 
+    def _table(self, headers, rows):
+        """
+        Render headers/rows as a fixed-width table inside a ``` code block.
+
+        Telegram only renders monospace inside code spans/blocks — plain text
+        with manual space-padding (the previous approach) does NOT line up on
+        the actual client, it renders in a proportional font. A code block
+        also sidesteps Markdown parsing entirely, so tradingsymbols, negative
+        PnL signs, etc. can never break message delivery here.
+        """
+        headers = [str(h) for h in headers]
+        str_rows = [[str(c) for c in row] for row in rows]
+        widths = [len(h) for h in headers]
+        for row in str_rows:
+            for i, cell in enumerate(row):
+                widths[i] = max(widths[i], len(cell))
+
+        def fmt_row(cells):
+            return "  ".join(c.ljust(w) for c, w in zip(cells, widths))
+
+        lines = [fmt_row(headers), "  ".join("-" * w for w in widths)]
+        lines.extend(fmt_row(r) for r in str_rows)
+        return "```\n" + "\n".join(lines) + "\n```"
+
     # ---------- MONITOR commands ----------
     def _cmd_status(self, args, chat_id, raw_msg):
         try:
@@ -322,42 +353,45 @@ class TelegramBot:
             pe = self.state.get_leg("PE")
             ce = self.state.get_leg("CE")
             mode = self.orders.mode if hasattr(self.orders, "mode") else self.config.get("mode", "?")
-            # Spot
             try:
                 spot_sym = self.config["underlying"]["spot_symbol"]
-                spot = self.kite.ltp([spot_sym])[spot_sym]["last_price"]
-                spot_str = f"{spot:.2f}"
+                spot_str = f"{self.kite.ltp([spot_sym])[spot_sym]['last_price']:.2f}"
             except Exception as e:
-                spot_str = f"error: {e}"
+                spot_str = f"err: {e}"
             hb = self.status_ref.get("last_heartbeat", "?")
-            # Overall PnL (realized + unrealized) — answers your MAXLOSS question
             try:
                 overall, realized, unreal = self.strategy._get_overall_pnl_today()
-                overall_str = f"Real {realized:.0f} + Unreal {unreal:.0f} = Total {overall:.0f}"
             except Exception:
-                overall_str = f"Real {today['realized_pnl']:.0f}"
-            tp_cfg = self.config['pe_leg'].get('take_profit', {})
-            # Build
-            lines = [
-                f"*🤖 Status — {now.strftime('%Y-%m-%d %H:%M:%S')}*",
-                f"Mode: `{mode}`  |  Kill-switch: `{'ON ⛔' if kill else 'OFF ✅'}`  |  Trading: `{'YES' if trading_allowed else 'NO'}`",
-                f"Spot ({self.config['underlying']['name']}): `{spot_str}`  |  Heartbeat: `{hb}`",
-                f"Today PnL: `Rs {today['realized_pnl']:.2f}` ({overall_str})  |  Rolls: `{today['roll_count']}`  |  Last roll: `{today['last_roll_time'] or '-'}`",
-                "",
-                f"*PE Leg* ({'ON' if self.config['pe_leg'].get('enabled') else 'OFF'}): " + (
-                    f"`{pe['tradingsymbol']} {pe['strike']:.0f} x{pe['quantity']} @ {pe['entry_price']:.2f} ({pe['entry_time'][:16]})`" if pe else "_flat — will enter when criteria met_"
-                ),
-                f"*CE Leg* ({'ON' if self.config['ce_leg'].get('enabled') else 'OFF'}): " + (
-                    f"`{ce['tradingsymbol']} {ce['strike']:.0f} x{ce['quantity']} @ {ce['entry_price']:.2f} ({ce['entry_time'][:16]})`" if ce else "_flat_"
-                ),
-                "",
-                f"Quantities: PE `{self.config['pe_leg']['quantity_lots']} lots`  CE `{self.config['ce_leg']['quantity_lots']} lots`  Actual CE qty preserved on roll (exit all → re-enter same qty)  Lot: `{self.store.lot_size(self.config['underlying']['name'])}` (real from Zerodha, not 75)",
-                f"Targets: PE `Rs{self.config['pe_leg']['target_premium']}` (±{self.config['pe_leg']['premium_tolerance']}, ±{self.config['pe_leg']['strike_search_range']})  CE `Rs{self.config['ce_leg']['target_premium']}` (±{self.config['ce_leg']['premium_tolerance']}, ±{self.config['ce_leg']['strike_search_range']} → ATM±100)  CE exit `<Rs{self.config['ce_leg']['exit_premium_threshold']}`",
-                f"Risk: SL PE `+{self.config['pe_leg']['stop_loss'].get('trigger_pct', 40)}%`  PE TP `{tp_cfg.get('trigger_pct',15)}%` (min {tp_cfg.get('min_profit_points',20)}pts, overall>{tp_cfg.get('require_overall_profit',True)})  MaxLoss `Rs{self.config['risk']['max_daily_loss']}` (total, not just realized)  MaxRolls `{self.config['ce_leg']['max_rolls_per_day']}`",
-            ]
-            return "\n".join(lines)
+                overall, realized, unreal = today["realized_pnl"], today["realized_pnl"], 0.0
+
+            overview = self._table(
+                ["Field", "Value"],
+                [
+                    ["Mode", mode],
+                    ["Kill-switch", "ON" if kill else "OFF"],
+                    ["Trading now", "YES" if trading_allowed else "NO"],
+                    ["Spot", spot_str],
+                    ["Heartbeat", str(hb)],
+                    ["Realized", f"{realized:.0f}"],
+                    ["Unrealized", f"{unreal:.0f}"],
+                    ["Overall PnL", f"{overall:.0f}"],
+                    ["Rolls today", str(today["roll_count"])],
+                    ["Last roll", (today["last_roll_time"] or "-")[:16]],
+                ],
+            )
+
+            leg_rows = []
+            for name, leg, cfg_key in (("PE", pe, "pe_leg"), ("CE", ce, "ce_leg")):
+                on = "ON" if self.config[cfg_key].get("enabled") else "OFF"
+                if leg:
+                    leg_rows.append([name, on, leg["tradingsymbol"], leg["quantity"], f"{leg['entry_price']:.2f}", leg["entry_time"][:16]])
+                else:
+                    leg_rows.append([name, on, "flat", "-", "-", "-"])
+            legs_table = self._table(["Leg", "State", "Symbol", "Qty", "Entry", "Since"], leg_rows)
+
+            return f"*🤖 Status — {now.strftime('%Y-%m-%d %H:%M:%S')}*\n{overview}\n{legs_table}\n_Full parameters: /config_"
         except Exception as e:
-            return f"⚠️ /status failed: {e}"
+            return f"⚠️ /status failed: `{e}`"
 
     def _cmd_positions(self, args, chat_id, raw_msg):
         try:
@@ -365,85 +399,82 @@ class TelegramBot:
             state_ce = self.state.get_leg("CE")
             try:
                 broker_pos = self.kite.positions().get("net", [])
-                # Filter NFO NIFTY shorts
                 name = self.config["underlying"]["name"]
                 relevant = [p for p in broker_pos if p.get("exchange") == "NFO" and name in p.get("tradingsymbol", "") and p.get("quantity", 0) != 0]
             except Exception as e:
-                return f"⚠️ Could not fetch broker positions: {e}"
-            lines = ["*📊 Broker vs State*"]
+                return f"⚠️ Could not fetch broker positions: `{e}`"
+
             if not relevant and not state_pe and not state_ce:
-                lines.append("No open positions (broker flat, state flat).")
-            else:
-                lines.append(f"Broker NFO {name} open: {len(relevant)}")
-                for p in relevant:
-                    lines.append(f"  • `{p['tradingsymbol']}` Qty:{p['quantity']} Avg:{p['average_price']:.2f} PnL:{p.get('pnl', p.get('unrealised', 0)):.2f}")
-                lines.append("")
-                lines.append(f"State PE: {state_pe['tradingsymbol'] + ' @' + str(state_pe['entry_price']) if state_pe else 'flat'}")
-                lines.append(f"State CE: {state_ce['tradingsymbol'] + ' @' + str(state_ce['entry_price']) if state_ce else 'flat'}")
-                # Highlight mismatch
-                broker_symbols = {p["tradingsymbol"] for p in relevant}
-                state_symbols = {s["tradingsymbol"] for s in [state_pe, state_ce] if s}
-                if broker_symbols != state_symbols:
-                    lines.append("")
-                    lines.append(f"⚠️ _Mismatch_: broker {broker_symbols} vs state {state_symbols}. Use /reconcile if you squared off manually.")
-            return "\n".join(lines)
+                return "*📊 Broker vs State*\nNo open positions (broker flat, state flat)."
+
+            rows = []
+            for p in relevant:
+                rows.append(["Broker", p["tradingsymbol"], p["quantity"], f"{p['average_price']:.2f}", f"{p.get('pnl', p.get('unrealised', 0)):.2f}"])
+            for label, leg in (("State PE", state_pe), ("State CE", state_ce)):
+                rows.append([label, leg["tradingsymbol"], leg["quantity"], f"{leg['entry_price']:.2f}", "-"] if leg else [label, "flat", "-", "-", "-"])
+            table = self._table(["Source", "Symbol", "Qty", "Price", "PnL"], rows)
+
+            broker_symbols = {p["tradingsymbol"] for p in relevant}
+            state_symbols = {s["tradingsymbol"] for s in (state_pe, state_ce) if s}
+            mismatch = "\n⚠️ *Mismatch* between broker and state — use /reconcile if you squared off manually." if broker_symbols != state_symbols else ""
+            return f"*📊 Broker vs State*\n{table}{mismatch}"
         except Exception as e:
-            return f"⚠️ /positions failed: {e}"
+            return f"⚠️ /positions failed: `{e}`"
 
     def _cmd_legs(self, args, chat_id, raw_msg):
         try:
-            lines = ["*🦵 Leg Details*"]
+            rows = []
             for leg_name in ["PE", "CE"]:
                 leg = self.state.get_leg(leg_name)
                 if not leg:
-                    lines.append(f"{leg_name}: _flat_")
+                    rows.append([leg_name, "flat", "-", "-", "-", "-", "-"])
                     continue
                 try:
                     key = f"{leg['exchange']}:{leg['tradingsymbol']}"
                     ltp = self.kite.ltp([key])[key]["last_price"]
-                    unreal = (leg["entry_price"] - ltp) * leg["quantity"]  # short PnL
-                    ltp_str = f"{ltp:.2f}"
-                    pnl_str = f"{unreal:+.2f}"
-                except Exception as e:
-                    ltp_str = f"error {e}"
-                    pnl_str = "?"
-                lines.append(
-                    f"{leg_name}: `{leg['tradingsymbol']}`\n"
-                    f"  Strike: {leg['strike']:.0f} {leg['option_type']}  Qty:{leg['quantity']}  Token:{leg['instrument_token']}\n"
-                    f"  Entry: {leg['entry_price']:.2f} @ {leg['entry_time'][:19]}  LTP: {ltp_str}  Unreal: Rs{pnl_str}"
-                )
-            return "\n".join(lines)
+                    unreal = (leg["entry_price"] - ltp) * leg["quantity"]
+                    ltp_str, pnl_str = f"{ltp:.2f}", f"{unreal:+.2f}"
+                except Exception:
+                    ltp_str, pnl_str = "?", "?"
+                rows.append([
+                    leg_name, leg["tradingsymbol"], f"{leg['strike']:.0f}", leg["quantity"],
+                    f"{leg['entry_price']:.2f}", ltp_str, pnl_str,
+                ])
+            table = self._table(["Leg", "Symbol", "Strike", "Qty", "Entry", "LTP", "Unreal"], rows)
+            return f"*🦵 Leg Details*\n{table}"
         except Exception as e:
-            return f"⚠️ /legs failed: {e}"
+            return f"⚠️ /legs failed: `{e}`"
 
     def _cmd_pnl(self, args, chat_id, raw_msg):
         try:
             today = self.state.today_state()
             try:
                 overall, realized, unreal = self.strategy._get_overall_pnl_today()
-                overall_line = f"Overall (real {realized:.0f} + unreal {unreal:.0f}) = `{overall:.2f}`"
             except Exception:
-                overall_line = f"Overall: error computing"
-            lines = [
-                f"*💰 Today ({today['trading_day']})*",
-                f"Realized PnL: `Rs {today['realized_pnl']:.2f}`",
-                f"{overall_line}",
-                f"Roll count: `{today['roll_count']}`",
-                f"Last roll: `{today['last_roll_time'] or '-'}`",
-            ]
-            # Show last 5 rolls
-            import sqlite3
+                overall, realized, unreal = today["realized_pnl"], today["realized_pnl"], 0.0
+
+            summary = self._table(
+                ["Field", "Value"],
+                [
+                    ["Realized", f"{realized:.2f}"],
+                    ["Unrealized", f"{unreal:.2f}"],
+                    ["Overall", f"{overall:.2f}"],
+                    ["Rolls today", today["roll_count"]],
+                    ["Last roll", (today["last_roll_time"] or "-")[:16]],
+                ],
+            )
             from contextlib import closing
             with closing(self.state._connect()) as conn:
-                rows = conn.execute("SELECT leg, action, tradingsymbol, price, quantity, time, note FROM roll_history ORDER BY id DESC LIMIT 5").fetchall()
-                if rows:
-                    lines.append("")
-                    lines.append("*Last 5 rolls:*")
-                    for r in rows:
-                        lines.append(f"  {r['time'][:16]} {r['leg']} {r['action']} {r['tradingsymbol']} @ {r['price']:.2f} ({r['note'] or ''})")
-            return "\n".join(lines)
+                recent = conn.execute(
+                    "SELECT leg, action, tradingsymbol, price, quantity, time FROM roll_history ORDER BY id DESC LIMIT 5"
+                ).fetchall()
+            events_table = ""
+            if recent:
+                rows = [[r["time"][:16], r["leg"], r["action"], r["tradingsymbol"], f"{r['price']:.2f}", r["quantity"]] for r in recent]
+                events_table = "\n*Last 5 events:*\n" + self._table(["Time", "Leg", "Action", "Symbol", "Price", "Qty"], rows)
+            return f"*💰 Today ({today['trading_day']})*\n{summary}{events_table}"
         except Exception as e:
-            return f"⚠️ /pnl failed: {e}"
+            return f"⚠️ /pnl failed: `{e}`"
 
     def _cmd_spot(self, args, chat_id, raw_msg):
         try:
@@ -478,40 +509,70 @@ class TelegramBot:
             cfg = self.config
             tp = cfg['pe_leg'].get('take_profit', {})
             lot = self.store.lot_size(cfg['underlying']['name'])
-            txt = (
-                f"*⚙️ Config* (mode `{cfg.get('mode')}`)\n"
-                f"PE: enabled={cfg['pe_leg']['enabled']} target={cfg['pe_leg']['target_premium']}±{cfg['pe_leg']['premium_tolerance']} range {cfg['pe_leg']['strike_search_range']} SL={cfg['pe_leg']['stop_loss'].get('trigger_pct')}% "
-                f"TP={tp.get('trigger_pct',15)}% (min {tp.get('min_profit_points',20)}pts, overall>{tp.get('require_overall_profit',True)}) qty={cfg['pe_leg']['quantity_lots']} lots (lot {lot}) expiry={cfg['pe_leg']['expiry_type']}\n"
-                f"CE: enabled={cfg['ce_leg']['enabled']} target={cfg['ce_leg']['target_premium']}±{cfg['ce_leg']['premium_tolerance']} range {cfg['ce_leg']['strike_search_range']} (ATM±100) exit<{cfg['ce_leg']['exit_premium_threshold']} qty={cfg['ce_leg']['quantity_lots']} lots (roll preserves qty) maxRolls={cfg['ce_leg']['max_rolls_per_day']}\n"
-                f"Risk: loss={cfg['risk']['max_daily_loss']} (total=real+unreal) {cfg['risk']['trading_start']}-{cfg['risk']['trading_end']} EOD={cfg['risk']['eod_square_off_time']} kill={cfg['risk']['kill_switch_file']}\n"
-                f"Orders: buffer={cfg['orders']['slippage_buffer_pct']}% timeout={cfg['orders']['order_fill_timeout_sec']}s fallback={cfg['orders']['fallback_to_market']}"
+            pe_table = self._table(
+                ["PE Field", "Value"],
+                [
+                    ["Enabled", cfg["pe_leg"]["enabled"]],
+                    ["Target", f"{cfg['pe_leg']['target_premium']} ±{cfg['pe_leg']['premium_tolerance']}"],
+                    ["Strike range", cfg["pe_leg"]["strike_search_range"]],
+                    ["Qty", f"{cfg['pe_leg']['quantity_lots']} lots (x{lot})"],
+                    ["Expiry", cfg["pe_leg"]["expiry_type"]],
+                    ["Stop-loss", f"+{cfg['pe_leg']['stop_loss'].get('trigger_pct')}%"],
+                    ["Take-profit", "ON" if tp.get("enabled") else "OFF"],
+                ],
             )
-            return txt
+            ce_table = self._table(
+                ["CE Field", "Value"],
+                [
+                    ["Enabled", cfg["ce_leg"]["enabled"]],
+                    ["Target", f"{cfg['ce_leg']['target_premium']} ±{cfg['ce_leg']['premium_tolerance']}"],
+                    ["Exit below", cfg["ce_leg"]["exit_premium_threshold"]],
+                    ["Qty", f"{cfg['ce_leg']['quantity_lots']} lots (roll preserves qty)"],
+                    ["Max rolls/day", cfg["ce_leg"]["max_rolls_per_day"]],
+                    ["Avoid 0DTE", cfg["ce_leg"].get("avoid_zero_dte_entry")],
+                ],
+            )
+            risk_table = self._table(
+                ["Risk Field", "Value"],
+                [
+                    ["Max daily loss", f"{cfg['risk']['max_daily_loss']} (total=real+unreal)"],
+                    ["Trading hours", f"{cfg['risk']['trading_start']}-{cfg['risk']['trading_end']}"],
+                    ["EOD square-off", cfg["risk"]["eod_square_off_time"]],
+                    ["Kill file", cfg["risk"]["kill_switch_file"]],
+                ],
+            )
+            return f"*⚙️ Config* (mode `{cfg.get('mode')}`)\n{pe_table}\n{ce_table}\n{risk_table}"
         except Exception as e:
-            return f"⚠️ /config failed: {e}"
+            return f"⚠️ /config failed: `{e}`"
 
     def _cmd_risk(self, args, chat_id, raw_msg):
         try:
             now = datetime.now()
             try:
                 overall, real, unreal = self.strategy._get_overall_pnl_today()
-                overall_str = f"total {overall:.0f} (real {real:.0f}+unreal {unreal:.0f})"
                 total_breached = self.risk.total_loss_breached(overall_pnl=overall)
             except Exception:
-                overall_str = "overall error"
+                overall, real, unreal = 0.0, 0.0, 0.0
                 total_breached = self.risk.daily_loss_breached()
-            lines = [
-                f"*🛡️ Risk @ {now.strftime('%H:%M:%S')}*",
-                f"Trading day: `{self.risk.is_trading_day(now)}`  Market open: `{self.risk.is_market_open(now)}`  EOD flag: `{self.risk.is_eod_square_off_time(now)}`",
-                f"Kill switch: `{'ON ⛔' if self.risk.kill_switch_active() else 'OFF ✅'} ({self.kill_switch_path})`",
-                f"Realized loss breached: `{self.risk.daily_loss_breached()}`  Total loss breached: `{total_breached}`  Trading allowed: `{self.risk.trading_allowed(now)}`",
-                f"Overall PnL now: `{overall_str}`  Limit: `-Rs{self.risk.max_daily_loss}` (total, not just realized)",
-                f"Holidays: `{self.risk.holidays or 'none'}`",
-                f"Orders mode: `{self.orders.mode}`",
-            ]
-            return "\n".join(lines)
+            table = self._table(
+                ["Field", "Value"],
+                [
+                    ["Trading day", self.risk.is_trading_day(now)],
+                    ["Market open", self.risk.is_market_open(now)],
+                    ["EOD flag", self.risk.is_eod_square_off_time(now)],
+                    ["Kill switch", "ON" if self.risk.kill_switch_active() else "OFF"],
+                    ["Realized breached", self.risk.daily_loss_breached()],
+                    ["Total breached", total_breached],
+                    ["Trading allowed", self.risk.trading_allowed(now)],
+                    ["Overall PnL", f"{overall:.0f} (r {real:.0f} + u {unreal:.0f})"],
+                    ["Max daily loss", f"-{self.risk.max_daily_loss}"],
+                    ["Holidays", self.risk.holidays or "none"],
+                    ["Orders mode", self.orders.mode],
+                ],
+            )
+            return f"*🛡️ Risk @ {now.strftime('%H:%M:%S')}*\n{table}"
         except Exception as e:
-            return f"⚠️ /risk failed: {e}"
+            return f"⚠️ /risk failed: `{e}`"
 
     def _cmd_health(self, args, chat_id, raw_msg):
         try:
@@ -524,21 +585,21 @@ class TelegramBot:
 
     def _cmd_history(self, args, chat_id, raw_msg):
         try:
-            import sqlite3
             from contextlib import closing
             n = 10
             if args and args[0].isdigit():
                 n = min(int(args[0]), 30)
             with closing(self.state._connect()) as conn:
-                rows = conn.execute("SELECT leg, action, tradingsymbol, price, quantity, time, note FROM roll_history ORDER BY id DESC LIMIT ?", (n,)).fetchall()
-                if not rows:
-                    return "_No history yet_"
-                lines = [f"*📜 Last {len(rows)} rolls*"]
-                for r in rows:
-                    lines.append(f"{r['time'][:16]} {r['leg']:2} {r['action']:15} {r['tradingsymbol']:25} @ {r['price']:.2f} x{r['quantity']} {r['note'] or ''}")
-                return "\n".join(lines)
+                rows_db = conn.execute(
+                    "SELECT leg, action, tradingsymbol, price, quantity, time, note FROM roll_history ORDER BY id DESC LIMIT ?", (n,)
+                ).fetchall()
+            if not rows_db:
+                return "_No history yet_"
+            rows = [[r["time"][:16], r["leg"], r["action"], r["tradingsymbol"], f"{r['price']:.2f}", r["quantity"], (r["note"] or "-")[:18]] for r in rows_db]
+            table = self._table(["Time", "Leg", "Action", "Symbol", "Price", "Qty", "Note"], rows)
+            return f"*📜 Last {len(rows_db)} events*\n{table}"
         except Exception as e:
-            return f"⚠️ /history failed: {e}"
+            return f"⚠️ /history failed: `{e}`"
 
     def _cmd_pe_profit(self, args, chat_id, raw_msg):
         try:
@@ -591,29 +652,26 @@ class TelegramBot:
             overall, real, unreal = self.strategy._get_overall_pnl_today()
             pe = self.state.get_leg("PE")
             ce = self.state.get_leg("CE")
-            lines = [
-                f"*📊 Overall PnL Today*",
-                f"Realized: `Rs {real:.2f}`",
-                f"Unrealized: `Rs {unreal:.2f}`",
-                f"Overall (real+unreal): `Rs {overall:.2f}`",
-                f"MAXLOSS limit: `-Rs{self.risk.max_daily_loss}` (total breached? `{self.risk.total_loss_breached(overall_pnl=overall)}`)",
-                f"Realized breached? `{self.risk.daily_loss_breached()}`",
+            rows = [
+                ["Realized", f"{real:.2f}"],
+                ["Unrealized", f"{unreal:.2f}"],
+                ["Overall", f"{overall:.2f}"],
+                ["Max loss limit", f"-{self.risk.max_daily_loss}"],
+                ["Total breached", self.risk.total_loss_breached(overall_pnl=overall)],
+                ["Realized breached", self.risk.daily_loss_breached()],
             ]
-            if pe:
+            for name, leg in (("PE", pe), ("CE", ce)):
+                if not leg:
+                    continue
                 try:
-                    ltp = self.strategy._quote_ltp(pe['exchange'], pe['tradingsymbol'])
-                    lines.append(f"PE {pe['tradingsymbol']} unreal {(pe['entry_price']-ltp)*pe['quantity']:.0f} (entry {pe['entry_price']:.2f} ltp {ltp:.2f})")
+                    ltp = self.strategy._quote_ltp(leg["exchange"], leg["tradingsymbol"])
+                    rows.append([f"{name} unreal", f"{(leg['entry_price']-ltp)*leg['quantity']:.0f}"])
                 except Exception:
                     pass
-            if ce:
-                try:
-                    ltp = self.strategy._quote_ltp(ce['exchange'], ce['tradingsymbol'])
-                    lines.append(f"CE {ce['tradingsymbol']} unreal {(ce['entry_price']-ltp)*ce['quantity']:.0f}")
-                except Exception:
-                    pass
-            return "\n".join(lines)
+            table = self._table(["Field", "Value"], rows)
+            return f"*📊 Overall PnL Today*\n{table}"
         except Exception as e:
-            return f"⚠️ /overall failed: {e}"
+            return f"⚠️ /overall failed: `{e}`"
 
     # ---------- CONTROL ----------
     def _cmd_pause(self, args, chat_id, raw_msg):
@@ -906,23 +964,35 @@ class TelegramBot:
         except Exception as e:
             return f"⚠️ failed: {e}"
 
+    def _cmd_ping(self, args, chat_id, raw_msg):
+        """
+        Zero-dependency liveness check: no state/kite/strategy calls, so it
+        answers even if something else is broken — the fastest way to confirm
+        the bot received your message and can reply, independent of whether
+        any trading logic ran this cycle.
+        """
+        now = datetime.now()
+        return f"🏓 pong — bot alive at `{now.strftime('%Y-%m-%d %H:%M:%S')}`"
+
     # ---------- HELP ----------
     def _cmd_help(self, args, chat_id, raw_msg):
         return (
-            "*🤖 Telegram Control — 28+ Commands*\n"
-            "Only your chat is authorized. Works on VPS (<3s) and Free Actions (≤5 min, 02-10 UTC).\n"
+            "*🤖 Telegram Control — 29+ Commands*\n"
+            "Only your chat is authorized. Works on VPS (<3s) and Free Actions (≤1 min via cron-job.org).\n"
+            "Data-heavy replies (`/status` `/positions` `/legs` `/pnl` `/config` `/risk` `/overall` `/history`) render as tables.\n"
             "\n*Monitor:*\n"
-            "`/status` — full snapshot (overall PnL = real+unreal, PE TP, CE 2-strike)\n"
-            "`/positions` — broker vs state, mismatch alert\n"
-            "`/legs` — PE/CE detail + live LTP & unreal\n"
-            "`/pnl` — today real + overall + last 5 rolls\n"
+            "`/ping` — is the bot alive right now (no state/API calls)\n"
+            "`/status` — full snapshot (overall PnL = real+unreal, legs table)\n"
+            "`/positions` — broker vs state table, mismatch alert\n"
+            "`/legs` — PE/CE detail table + live LTP & unreal\n"
+            "`/pnl` — today real + overall + last 5 events table\n"
             "`/overall` / `/total` — overall today (real+unreal) vs MAXLOSS\n"
             "`/spot` — Nifty spot 256265\n"
             "`/quote NFO:SYMBOL` — e.g. `/quote NFO:NIFTY24JUN22500CE`\n"
-            "`/config` — compact config (PE TP, CE 2-strike, lot real)\n"
+            "`/config` — PE/CE/Risk tables\n"
             "`/risk` — hours, kill, real vs total breach, overall PnL\n"
-            "`/pe_profit` — PE take-profit config & trigger status\n"
-            "`/health` — heartbeat & mode  `/history [N]` — last N rolls\n"
+            "`/pe_profit` — PE take-profit config & trigger status (currently OFF)\n"
+            "`/health` — heartbeat & mode  `/history [N]` — last N events table\n"
             "\n*Control:*\n"
             "`/pause` — ⛔ STOP_TRADING → no new entries/rolls (keep positions)\n"
             "`/resume` — ✅ remove STOP_TRADING\n"
