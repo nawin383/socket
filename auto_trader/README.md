@@ -78,7 +78,8 @@ auto_trader/
 │   ├── ticker_feed.py    live LTPs via this repo's kite_websocket.KiteWebSocket (VPS path only)
 │   ├── health.py         HTTP healthcheck endpoint for uptime monitoring (VPS path only)
 │   ├── main.py           always-on entrypoint: wires it all together, runs the loop (VPS path)
-│   └── poll_once.py      single-shot entrypoint for the GitHub Actions schedule
+│   ├── poll_once.py      single-shot entrypoint for the GitHub Actions schedule
+│   └── backtest.py       test SL/roll parameter changes against a premium CSV you supply
 ├── deploy/                Docker + systemd VPS guide, and the GitHub Actions guide
 ├── scripts/               stop_trading.sh / resume_trading.sh (kill switch, VPS path)
 └── tests/                 unit tests for the pure decision logic
@@ -128,6 +129,27 @@ pytest
 
 These cover the pure decision logic (ATM/ITM/OTM math, roll-trigger
 conditions, risk guards) with no live API calls.
+
+## Backtesting a parameter change
+
+`src/backtest.py` replays the PE stop-loss/re-entry and CE roll trigger
+math against a premium time series you supply — e.g. to check whether a
+different `trigger_pct` or `exit_premium_threshold` would have behaved
+better on a real stretch of history, before changing it live. It does
+**not** pick strikes/expiries automatically across time (that needs a
+historical option-chain database this repo doesn't have) — you provide
+the premium path for the contract(s) you want to test, e.g. via
+`kite.historical_data(instrument_token, from_date, to_date, "day")` run
+with your own credentials.
+
+```bash
+# PE: date,premium CSV, one held contract from entry to expiry
+python -m src.backtest pe 700 75 40 pe_history.csv --reentry 20
+
+# CE: date,premium,strike,spot CSV — reports roll-condition FREQUENCY
+# (not a full re-entered-leg PnL chain; see the module docstring for why)
+python -m src.backtest ce 90 ce_history.csv
+```
 
 ## Known limitations / possible next steps
 
