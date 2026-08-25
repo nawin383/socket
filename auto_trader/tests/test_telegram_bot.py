@@ -134,5 +134,35 @@ class TestCommandsSmoke(unittest.TestCase):
         self.assertIn("pong", reply)
 
 
+class TestResetPnl(unittest.TestCase):
+    def test_requires_confirm_and_does_not_change_anything_without_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot, state = _make_bot(tmp)
+            state.add_realized_pnl(526519.50)
+
+            reply = bot._cmd_reset_pnl([], "123", {})
+
+            self.assertIn("confirm", reply.lower())
+            self.assertEqual(state.today_state()["realized_pnl"], 526519.50)
+
+    def test_confirm_zeroes_realized_and_roll_count_but_keeps_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot, state = _make_bot(tmp)
+            state.add_realized_pnl(526519.50)
+            state.log_roll("CE", "EXPIRY_SQUAREOFF", "NIFTY2690124300CE", 170.0, 195, note="pnl=-1456.00")
+
+            reply = bot._cmd_reset_pnl(["confirm"], "123", {})
+
+            today = state.today_state()
+            self.assertEqual(today["realized_pnl"], 0.0)
+            self.assertEqual(today["roll_count"], 0)
+            self.assertIn("reset", reply.lower())
+            # roll_history is a separate table — confirm it's untouched.
+            from contextlib import closing
+            with closing(state._connect()) as conn:
+                rows = conn.execute("SELECT COUNT(*) c FROM roll_history").fetchone()
+                self.assertEqual(rows["c"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

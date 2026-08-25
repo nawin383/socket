@@ -158,6 +158,23 @@ class StateStore:
             )
             conn.commit()
 
+    def reset_today_pnl(self):
+        """
+        Zero out today's realized_pnl/roll_count — for correcting a ledger
+        polluted by a bug (e.g. a duplicate-event loop), not for real trading
+        use. roll_history rows are left untouched as the audit trail of what
+        actually happened; this only clears the running total they fed into.
+        """
+        today = datetime.now().date().isoformat()
+        with closing(self._connect()) as conn:
+            conn.execute("INSERT OR IGNORE INTO daily_state (trading_day) VALUES (?)", (today,))
+            conn.execute(
+                "UPDATE daily_state SET realized_pnl = 0, roll_count = 0, last_roll_time = NULL "
+                "WHERE trading_day = ?",
+                (today,),
+            )
+            conn.commit()
+
     def today_state(self) -> sqlite3.Row:
         """Read-only when today's row already exists, so polling this on every
         run (as the GitHub Actions poller does) doesn't churn the on-disk file
