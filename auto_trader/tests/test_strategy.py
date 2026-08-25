@@ -387,5 +387,65 @@ class TestReconcileFromBroker(unittest.TestCase):
         self.notifier.send.assert_called_once()
 
 
+class TestEodSummaryAndPnlHistory(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.state = StateStore(Path(self.tmpdir.name) / "state.db")
+        self.notifier = MagicMock()
+        self.strategy = NiftyOptionSellerStrategy(
+            kite=MagicMock(), store=MagicMock(), orders=MagicMock(),
+            state=self.state, risk=MagicMock(), notifier=self.notifier, config=CONFIG,
+        )
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_sends_once_and_includes_todays_pnl_and_events(self):
+        self.state.add_realized_pnl(1234.5)
+        self.state.log_roll("CE", "EXIT", "NIFTY2690124200CE", 85.0, 75, note="pnl=2625.00")
+
+        self.strategy.send_eod_summary_if_due(datetime.now())
+
+        self.notifier.send.assert_called_once()
+        message = self.notifier.send.call_args[0][0]
+        self.assertIn("1234.50", message)
+        self.assertIn("2690124200CE", message)  # short_symbol strips "NIFTY"
+        self.assertTrue(self.state.eod_summary_sent_today())
+
+    def test_does_not_send_twice_in_one_day(self):
+        self.strategy.send_eod_summary_if_due(datetime.now())
+        self.strategy.send_eod_summary_if_due(datetime.now())
+
+        self.notifier.send.assert_called_once()
+
+    def test_no_events_today_still_sends_a_summary(self):
+        self.strategy.send_eod_summary_if_due(datetime.now())
+
+        self.notifier.send.assert_called_once()
+        self.assertIn("No events today", self.notifier.send.call_args[0][0])
+
+    def test_pnl_history_summary_includes_a_total_row(self):
+        self.state.add_realized_pnl(100.0)
+
+        summary = self.strategy.pnl_history_summary(7, "Weekly")
+
+        self.assertIn("Weekly", summary)
+        self.assertIn("TOTAL", summary)
+        self.assertIn("100.00", summary)
+
+    def test_pnl_history_summary_handles_no_history(self):
+        with tempfile.TemporaryDirectory() as empty_tmp:
+            empty_state = StateStore(Path(empty_tmp) / "state.db")
+            # No add_realized_pnl call -> today_state() creates today's row lazily
+            # only when read; daily_pnl_history reads raw rows, so with a truly
+            # untouched db this returns nothing.
+            strategy = NiftyOptionSellerStrategy(
+                kite=MagicMock(), store=MagicMock(), orders=MagicMock(),
+                state=empty_state, risk=MagicMock(), notifier=MagicMock(), config=CONFIG,
+            )
+            summary = strategy.pnl_history_summary(7, "Weekly")
+            self.assertIn("No history yet", summary)
+
+
 if __name__ == "__main__":
     unittest.main()

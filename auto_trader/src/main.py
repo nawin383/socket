@@ -146,6 +146,7 @@ def main():
             if risk.is_eod_square_off_time(now):
                 strategy.square_off_leg_if_near_expiry("PE", strategy.pe_cfg, now)
                 strategy.square_off_leg_if_near_expiry("CE", strategy.ce_cfg, now)
+                strategy.send_eod_summary_if_due(now)
 
             # MAXLOSS now on total (realized + unrealized) — answers your question:
             # "how will you determine based on todays loss or entire loss" — we now use entire.

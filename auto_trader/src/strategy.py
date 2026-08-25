@@ -17,9 +17,11 @@ lost/replaced state file) instead of blindly opening a duplicate.
 """
 
 import logging
+from contextlib import closing
 from datetime import date, datetime
 
 from .instruments import InstrumentStore, find_strike_by_target_premium, is_otm
+from .table_format import render_table, short_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -435,3 +437,51 @@ class NiftyOptionSellerStrategy:
             self.state.clear_leg(leg_name)
             self.state.record_squareoff(leg_name, today, reason)
             self.notifier.send(f"{leg_name} leg squared off ({reason}): {leg['tradingsymbol']} @ {fill:.2f} (pnl {pnl:.2f})")
+
+    def send_eod_summary_if_due(self, now: datetime):
+        """
+        Call once EOD square-off time has passed. Sends exactly one Telegram
+        recap of the day (realized PnL, roll count, every SL/TP/squareoff/roll
+        event) instead of you having to remember to ask /pnl — guarded by
+        eod_summary_sent_today() so it's safe to call on every poll cycle for
+        the rest of the day.
+        """
+        if self.state.eod_summary_sent_today():
+            return
+
+        today_row = self.state.today_state()
+        today = today_row["trading_day"]
+        with closing(self.state._connect()) as conn:
+            events = conn.execute(
+                "SELECT leg, action, tradingsymbol, price, quantity, time, note FROM roll_history "
+                "WHERE time LIKE ? ORDER BY id ASC",
+                (f"{today}%",),
+            ).fetchall()
+
+        lines = [
+            f"*📋 End-of-day summary — {today}*",
+            f"Realized PnL: `Rs {today_row['realized_pnl']:.2f}`",
+            f"Rolls/events today: `{today_row['roll_count']}`",
+        ]
+        if events:
+            rows = [
+                [e["time"][11:16], e["leg"], e["action"], short_symbol(e["tradingsymbol"], self.underlying_cfg["name"]),
+                 f"{e['price']:.2f}", e["quantity"]]
+                for e in events
+            ]
+            lines.append(render_table(["Time", "Leg", "Action", "Symbol", "Price", "Qty"], rows))
+        else:
+            lines.append("_No events today._")
+
+        self.notifier.send("\n".join(lines))
+        self.state.mark_eod_summary_sent(today)
+
+    def pnl_history_summary(self, days: int, label: str) -> str:
+        """Build the /weekly or /monthly rollup table from daily_state."""
+        rows_db = self.state.daily_pnl_history(days)
+        if not rows_db:
+            return f"_No history yet for {label}._"
+        rows = [[r["trading_day"], f"{r['realized_pnl']:.2f}", r["roll_count"]] for r in rows_db]
+        total = sum(r["realized_pnl"] for r in rows_db)
+        rows.append(["TOTAL", f"{total:.2f}", sum(r["roll_count"] for r in rows_db)])
+        return f"*📈 {label} PnL ({len(rows_db)} trading days)*\n" + render_table(["Day", "Realized", "Rolls"], rows)
