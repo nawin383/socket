@@ -319,6 +319,17 @@ class TelegramBot:
         except Exception:
             return str(v)
 
+    def _short_symbol(self, tradingsymbol: str) -> str:
+        """
+        Strip the redundant underlying-name prefix for table cells — e.g.
+        "NIFTY26SEP25000PE" -> "26SEP25000PE". Every symbol in this
+        single-underlying bot shares the same prefix, so it adds width
+        without adding information; on a phone-width code block that's the
+        difference between fitting on screen and needing to scroll.
+        """
+        name = self.config["underlying"]["name"]
+        return tradingsymbol[len(name):] if tradingsymbol.startswith(name) else tradingsymbol
+
     def _table(self, headers, rows):
         """
         Render headers/rows as a fixed-width table inside a ``` code block.
@@ -384,7 +395,7 @@ class TelegramBot:
             for name, leg, cfg_key in (("PE", pe, "pe_leg"), ("CE", ce, "ce_leg")):
                 on = "ON" if self.config[cfg_key].get("enabled") else "OFF"
                 if leg:
-                    leg_rows.append([name, on, leg["tradingsymbol"], leg["quantity"], f"{leg['entry_price']:.2f}", leg["entry_time"][:16]])
+                    leg_rows.append([name, on, self._short_symbol(leg["tradingsymbol"]), leg["quantity"], f"{leg['entry_price']:.2f}", leg["entry_time"][:16]])
                 else:
                     leg_rows.append([name, on, "flat", "-", "-", "-"])
             legs_table = self._table(["Leg", "State", "Symbol", "Qty", "Entry", "Since"], leg_rows)
@@ -409,9 +420,9 @@ class TelegramBot:
 
             rows = []
             for p in relevant:
-                rows.append(["Broker", p["tradingsymbol"], p["quantity"], f"{p['average_price']:.2f}", f"{p.get('pnl', p.get('unrealised', 0)):.2f}"])
+                rows.append(["Broker", self._short_symbol(p["tradingsymbol"]), p["quantity"], f"{p['average_price']:.2f}", f"{p.get('pnl', p.get('unrealised', 0)):.2f}"])
             for label, leg in (("State PE", state_pe), ("State CE", state_ce)):
-                rows.append([label, leg["tradingsymbol"], leg["quantity"], f"{leg['entry_price']:.2f}", "-"] if leg else [label, "flat", "-", "-", "-"])
+                rows.append([label, self._short_symbol(leg["tradingsymbol"]), leg["quantity"], f"{leg['entry_price']:.2f}", "-"] if leg else [label, "flat", "-", "-", "-"])
             table = self._table(["Source", "Symbol", "Qty", "Price", "PnL"], rows)
 
             broker_symbols = {p["tradingsymbol"] for p in relevant}
@@ -437,7 +448,7 @@ class TelegramBot:
                 except Exception:
                     ltp_str, pnl_str = "?", "?"
                 rows.append([
-                    leg_name, leg["tradingsymbol"], f"{leg['strike']:.0f}", leg["quantity"],
+                    leg_name, self._short_symbol(leg["tradingsymbol"]), f"{leg['strike']:.0f}", leg["quantity"],
                     f"{leg['entry_price']:.2f}", ltp_str, pnl_str,
                 ])
             table = self._table(["Leg", "Symbol", "Strike", "Qty", "Entry", "LTP", "Unreal"], rows)
@@ -470,7 +481,7 @@ class TelegramBot:
                 ).fetchall()
             events_table = ""
             if recent:
-                rows = [[r["time"][:16], r["leg"], r["action"], r["tradingsymbol"], f"{r['price']:.2f}", r["quantity"]] for r in recent]
+                rows = [[r["time"][:16], r["leg"], r["action"], self._short_symbol(r["tradingsymbol"]), f"{r['price']:.2f}", r["quantity"]] for r in recent]
                 events_table = "\n*Last 5 events:*\n" + self._table(["Time", "Leg", "Action", "Symbol", "Price", "Qty"], rows)
             return f"*💰 Today ({today['trading_day']})*\n{summary}{events_table}"
         except Exception as e:
@@ -595,7 +606,7 @@ class TelegramBot:
                 ).fetchall()
             if not rows_db:
                 return "_No history yet_"
-            rows = [[r["time"][:16], r["leg"], r["action"], r["tradingsymbol"], f"{r['price']:.2f}", r["quantity"], (r["note"] or "-")[:18]] for r in rows_db]
+            rows = [[r["time"][:16], r["leg"], r["action"], self._short_symbol(r["tradingsymbol"]), f"{r['price']:.2f}", r["quantity"], (r["note"] or "-")[:18]] for r in rows_db]
             table = self._table(["Time", "Leg", "Action", "Symbol", "Price", "Qty", "Note"], rows)
             return f"*📜 Last {len(rows_db)} events*\n{table}"
         except Exception as e:
@@ -729,6 +740,7 @@ class TelegramBot:
                 self.state.log_roll("PE", "SQUAREOFF", leg["tradingsymbol"], fill, leg["quantity"], note=f"Telegram /squareoff PE by {chat_id}")
                 self.state.add_realized_pnl(pnl)
                 self.state.clear_leg("PE")
+                self.state.record_squareoff("PE", datetime.now().date().isoformat(), f"telegram /squareoff by {chat_id}")
                 self.notifier.send(f"PE squared off by Telegram: {leg['tradingsymbol']} @ {fill:.2f} PnL {pnl:.2f}")
                 return f"✅ PE squared off @ {fill:.2f} PnL {pnl:.2f}"
             elif target == "CE":
@@ -743,6 +755,7 @@ class TelegramBot:
                 self.state.log_roll("CE", "SQUAREOFF", leg["tradingsymbol"], fill, leg["quantity"], note=f"Telegram /squareoff by {chat_id}")
                 self.state.add_realized_pnl(pnl)
                 self.state.clear_leg("CE")
+                self.state.record_squareoff("CE", datetime.now().date().isoformat(), f"telegram /squareoff by {chat_id}")
                 self.notifier.send(f"CE squared off by Telegram: {leg['tradingsymbol']} @ {fill:.2f} PnL {pnl:.2f}")
                 return f"✅ CE squared off @ {fill:.2f} PnL {pnl:.2f}"
             elif target == "ALL":

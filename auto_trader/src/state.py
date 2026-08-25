@@ -62,6 +62,14 @@ CREATE TABLE IF NOT EXISTS tp_events (
     PRIMARY KEY (leg, trading_day)
 );
 
+CREATE TABLE IF NOT EXISTS squareoff_events (
+    leg TEXT NOT NULL,
+    trading_day TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    time TEXT NOT NULL,
+    PRIMARY KEY (leg, trading_day)
+);
+
 CREATE TABLE IF NOT EXISTS pending_orders (
     leg TEXT PRIMARY KEY,
     order_id TEXT NOT NULL,
@@ -194,6 +202,36 @@ class StateStore:
         with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT 1 FROM tp_events WHERE leg = ? AND trading_day = ?", (leg, today)
+            ).fetchone()
+            return row is not None
+
+    def record_squareoff(self, leg: str, trading_day: str, reason: str):
+        """
+        Mark that this leg was deliberately squared off (EOD/expiry, daily-loss
+        halt, or a manual /squareoff) today — distinct from a CE roll, which
+        re-enters immediately and never leaves the leg flat across cycles.
+
+        reconcile_from_broker() checks this before adopting: in paper mode a
+        square-off is simulated only, so a real broker-adopted position stays
+        genuinely open at the broker afterward. Without this flag, the very
+        next poll would see that still-open real position, re-adopt it as if
+        it were brand new, and immediately hit the same square-off condition
+        again — an infinite adopt/square-off loop, one fake PnL entry and one
+        "Adopted existing broker position" Telegram message per poll cycle.
+        """
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO squareoff_events (leg, trading_day, reason, time) "
+                "VALUES (?,?,?,?)",
+                (leg, trading_day, reason, datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def squared_off_today(self, leg: str) -> bool:
+        today = datetime.now().date().isoformat()
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM squareoff_events WHERE leg = ? AND trading_day = ?", (leg, today)
             ).fetchone()
             return row is not None
 

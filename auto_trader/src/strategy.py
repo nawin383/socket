@@ -69,6 +69,16 @@ class NiftyOptionSellerStrategy:
 
             if self.state.get_leg(leg_name):
                 continue
+            # The bot already deliberately decided today to be flat on this
+            # leg (EOD/expiry square-off, PE stop-loss, PE take-profit, or a
+            # manual /squareoff). In paper mode that decision never sent a
+            # real closing order, so the real broker position is still open
+            # here — without this check we'd re-adopt it as "new" and
+            # immediately re-trigger the same exit, forever, once per poll.
+            if (self.state.squared_off_today(leg_name)
+                    or self.state.stop_loss_fired_today(leg_name)
+                    or self.state.take_profit_fired_today(leg_name)):
+                continue
 
             strike = self.store.strike_for_tradingsymbol(name, tradingsymbol) or 0.0
             quantity = abs(pos["quantity"])
@@ -408,9 +418,11 @@ class NiftyOptionSellerStrategy:
                              note=f"pnl={pnl:.2f}")
         self.state.add_realized_pnl(pnl)
         self.state.clear_leg(leg_name)
+        self.state.record_squareoff(leg_name, now.date().isoformat(), "expiry")
         self.notifier.send(f"{leg_name} leg squared off before expiry: {leg['tradingsymbol']} @ {fill:.2f} (pnl {pnl:.2f})")
 
     def square_off_all(self, reason: str):
+        today = date.today().isoformat()
         for leg_name, cfg in (("PE", self.pe_cfg), ("CE", self.ce_cfg)):
             leg = self.state.get_leg(leg_name)
             if not leg:
@@ -421,4 +433,5 @@ class NiftyOptionSellerStrategy:
             self.state.log_roll(leg_name, "SQUAREOFF", leg["tradingsymbol"], fill, leg["quantity"], note=reason)
             self.state.add_realized_pnl(pnl)
             self.state.clear_leg(leg_name)
+            self.state.record_squareoff(leg_name, today, reason)
             self.notifier.send(f"{leg_name} leg squared off ({reason}): {leg['tradingsymbol']} @ {fill:.2f} (pnl {pnl:.2f})")
