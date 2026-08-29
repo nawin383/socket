@@ -1,0 +1,29 @@
+# Bitcoin Virtual Trading Platform - Professional Edition
+# Requirements
+
+# Core
+requests>=2.31.0
+python-dateutil>=2.8.2
+
+# GUI
+ttkbootstrap>=1.10.1
+
+# Data & Analytics
+pandas>=2.0.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+
+# Charting
+matplotlib>=3.7.0
+plotly>=5.14.0
+kaleido>=0.2.1
+
+# WebSocket
+websocket-client>=1.5.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+tabulate>=0.9.0
