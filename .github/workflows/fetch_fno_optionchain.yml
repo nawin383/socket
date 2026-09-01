@@ -1,0 +1,55 @@
+name: Fetch FNO Screener + Nifty Option Chain Real
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-fno:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: auto_trader/requirements.txt
+
+      - name: Install deps
+        run: |
+          pip install -q kiteconnect pyotp requests pandas openpyxl pytz curl_cffi
+          pip install -q -r auto_trader/requirements.txt || true
+
+      - name: Fetch FNO + Nifty Option Chain (REAL via Kite + NSE)
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
+          KITE_PASSWORD: ${{ secrets.KITE_PASSWORD }}
+          KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
+        run: |
+          python -u .github/scripts/fetch_fno_optionchain_real.py
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FNO_Screener_Nifty_OptionChain_REAL
+          path: |
+            FNO_Screener_Nifty_OptionChain_REAL.xlsx
+            FNO_Screener_Nifty_OptionChain_REAL.csv
+            Nifty_OptionChain_Tshape.csv
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Commit Excel to repo (firewall bypass)
+        run: |
+          git config user.name "vix-bot"
+          git config user.email "vix@users.noreply.github.com"
+          git add FNO_Screener_Nifty_OptionChain_REAL.xlsx FNO_Screener_Nifty_OptionChain_REAL.csv Nifty_OptionChain_Tshape.csv || true
+          git diff --cached --quiet || git commit -m "data: FNO screener + Nifty option chain $(date +%F) [skip ci]"
+          git push origin HEAD
+          ls -lh *.xlsx *.csv || true
