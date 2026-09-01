@@ -1,0 +1,48 @@
+name: Fetch India VIX 15min 6M Real
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-vix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: auto_trader/requirements.txt
+
+      - name: Install deps
+        run: |
+          pip install -q kiteconnect pyotp requests pandas openpyxl pytz
+          pip install -q -r auto_trader/requirements.txt || true
+
+      - name: Fetch India VIX 15min 6 Months (REAL via Kite)
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
+          KITE_PASSWORD: ${{ secrets.KITE_PASSWORD }}
+          KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
+        run: |
+          python -u .github/scripts/fetch_vix_real.py
+
+      - name: Upload Excel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: India_VIX_15min_6M_REAL
+          path: |
+            India_VIX_15min_6M_REAL.xlsx
+            India_VIX_15min_6M_REAL.csv
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: List files
+        run: ls -lh *.xlsx *.csv || true
