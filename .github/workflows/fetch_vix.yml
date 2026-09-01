@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   fetch-vix:
@@ -43,6 +43,15 @@ jobs:
             India_VIX_15min_6M_REAL.csv
           if-no-files-found: error
           retention-days: 7
+
+      - name: Commit Excel to repo (fallback for firewall)
+        run: |
+          git config user.name "vix-bot"
+          git config user.email "vix@users.noreply.github.com"
+          git add India_VIX_15min_6M_REAL.xlsx India_VIX_15min_6M_REAL.csv || true
+          git diff --cached --quiet || git commit -m "data: real VIX 15min 6M $(date +%F) [skip ci]"
+          git push origin HEAD || echo "push failed, trying with retry"
+          ls -lh *.xlsx *.csv || true
 
       - name: List files
         run: ls -lh *.xlsx *.csv || true
