@@ -3,74 +3,110 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Kite Auto Trader — Dashboard</title>
+<title>Kite Auto Trader — Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
 <style>
+  /* Ledger design system: warm parchment, near-black ink, gold rules,
+     Cormorant Garamond display / Lora body — same language as the
+     project's NSE-screener companion, applied to this bot's own identity. */
   :root {
-    --bg: #f7f7f8; --panel: #ffffff; --border: #e2e2e6; --text: #1c1c1f;
-    --muted: #6b6b74; --accent: #3d5afe; --good: #1f9d55; --bad: #d64545;
-    --warn: #b8860b; --code-bg: #f0f0f3;
+    --bg: #f3f2f2; --panel: #eae6dd; --border: #b68235; --border-soft: rgba(182,130,53,0.35);
+    --text: #201f1d; --muted: #6b5f4d; --accent: #b68235; --accent-dark: #7d5411;
+    --good: #3f6b45; --bad: #96402e; --warn: #7d5411; --code-bg: #efeadf;
+    --masthead-bg: #201f1d; --masthead-text: #f3f2f2;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #16161a; --panel: #1e1e23; --border: #2e2e35; --text: #e8e8ec;
-      --muted: #9a9aa5; --accent: #7b93ff; --good: #4ade80; --bad: #f87171;
-      --warn: #fbbf24; --code-bg: #131316;
+      --bg: #17140f; --panel: #221d15; --border: #b68235; --border-soft: rgba(182,130,53,0.4);
+      --text: #f0ece2; --muted: #b6a988; --accent: #d4a24e; --accent-dark: #b68235;
+      --good: #6fbf7a; --bad: #e0836a; --warn: #d4a24e; --code-bg: #1c1710;
+      --masthead-bg: #0d0b08; --masthead-text: #f0ece2;
     }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    padding: 16px; max-width: 900px; margin-inline: auto;
+    font-family: "Lora", Georgia, serif;
+    padding: 0 0 24px; max-width: 900px; margin-inline: auto;
   }
-  h1 { font-size: 1.3rem; margin: 0 0 4px; }
-  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 16px; }
+  .masthead {
+    background: var(--masthead-bg); color: var(--masthead-text);
+    text-align: center; padding: 22px 16px 18px; margin-bottom: 18px;
+    border-bottom: 3px solid var(--accent);
+  }
+  .masthead h1 {
+    font-family: "Cormorant Garamond", Georgia, serif; font-weight: 600;
+    font-size: 2.1rem; letter-spacing: 0.02em; margin: 0;
+  }
+  .masthead .tag {
+    font-size: 0.78rem; color: var(--accent); text-transform: uppercase;
+    letter-spacing: 0.28em; margin-top: 4px;
+  }
+  .sub {
+    color: var(--muted); font-size: 0.82rem; margin: 0 16px 16px;
+    text-align: center; font-style: italic;
+  }
   .panel {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    padding: 14px 16px; margin-bottom: 14px;
+    background: var(--panel); border: 1px solid var(--border-soft); border-radius: 4px;
+    padding: 16px 18px; margin: 0 16px 14px;
   }
-  .panel h2 { font-size: 0.95rem; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .panel h2 {
+    font-family: "Cormorant Garamond", Georgia, serif; font-weight: 600;
+    font-size: 1.25rem; margin: 0 0 12px; display: flex; align-items: center; gap: 8px;
+    color: var(--accent-dark); border-bottom: 1px solid var(--border-soft); padding-bottom: 8px;
+  }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
-  .stat { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-  .stat .label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
-  .stat .value { font-size: 1.05rem; font-weight: 600; margin-top: 2px; word-break: break-word; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
-  .pill.good { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); }
-  .pill.bad { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); }
-  .pill.warn { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
-  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  th { color: var(--muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; }
+  .stat { border: 1px solid var(--border-soft); border-radius: 3px; padding: 8px 10px; background: var(--bg); }
+  .stat .label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .stat .value { font-family: "Cormorant Garamond", Georgia, serif; font-size: 1.25rem; font-weight: 600; margin-top: 2px; word-break: break-word; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 2px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; }
+  .pill.good { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+  .pill.bad { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+  .pill.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; font-family: "Lora", Georgia, serif; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+  td { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  th { color: var(--accent-dark); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; font-family: "Lora", Georgia, serif; }
   .table-wrap { overflow-x: auto; }
   .muted { color: var(--muted); }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  label { font-size: 0.8rem; color: var(--muted); display: block; margin-bottom: 3px; }
+  label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 4px; }
   input[type="number"], input[type="text"], input[type="password"], select {
-    background: var(--code-bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 6px; padding: 6px 8px; font-size: 0.85rem; width: 100%;
+    background: var(--code-bg); border: 1px solid var(--border-soft); color: var(--text);
+    border-radius: 3px; padding: 6px 8px; font-size: 0.85rem; width: 100%;
+    font-family: ui-monospace, monospace;
   }
   .field { flex: 1 1 130px; min-width: 110px; }
   button {
-    background: var(--accent); color: white; border: none; border-radius: 7px;
-    padding: 8px 14px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--masthead-text); border: none; border-radius: 3px;
+    padding: 8px 16px; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    text-transform: uppercase; letter-spacing: 0.08em;
   }
-  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  button.secondary { background: transparent; color: var(--accent-dark); border: 1px solid var(--accent); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   #status-msg { font-size: 0.82rem; margin-top: 8px; min-height: 1.2em; }
   #status-msg.err { color: var(--bad); }
   #status-msg.ok { color: var(--good); }
-  fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0 0 12px; padding: 10px 12px; }
-  legend { font-size: 0.8rem; font-weight: 600; padding: 0 6px; color: var(--muted); }
+  fieldset { border: 1px solid var(--border-soft); border-radius: 3px; margin: 0 0 12px; padding: 10px 12px; }
+  legend {
+    font-family: "Cormorant Garamond", Georgia, serif; font-size: 0.95rem; font-weight: 600;
+    padding: 0 8px; color: var(--accent-dark);
+  }
   .confirm-row { display: flex; align-items: center; gap: 6px; margin: 10px 0; font-size: 0.82rem; }
-  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
-  a { color: var(--accent); }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 0.85em; font-family: ui-monospace, monospace; }
+  a { color: var(--accent-dark); }
 </style>
 </head>
 <body>
 
-<h1>🤖 Kite Auto Trader</h1>
+<div class="masthead">
+  <h1>Kite Auto Trader</h1>
+  <div class="tag">NIFTY Options Ledger</div>
+</div>
 <div class="sub" id="last-updated">Loading…</div>
 
 <div class="panel" id="overview-panel">
@@ -94,7 +130,7 @@
 </div>
 
 <div class="panel" id="settings-panel">
-  <h2>⚙️ Settings <span class="muted" style="font-weight:400;font-size:0.75rem;">— same fields as the Telegram /set_* commands</span></h2>
+  <h2>Settings <span class="muted" style="font-weight:400;font-size:0.75rem;font-family:'Lora',Georgia,serif;">— same fields as the Telegram /set_* commands</span></h2>
 
   <fieldset>
     <legend>PE leg</legend>
